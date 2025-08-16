@@ -1,0 +1,12 @@
+[submodule "external/skia"]
+	path = external/skia
+	url = https://skia.googlesource.com/skia.git
+[submodule "external/lexbor"]
+	path = external/lexbor
+	url = https://github.com/lexbor/lexbor.git
+[submodule "external/yoga"]
+	path = external/yoga
+	url = https://github.com/facebook/yoga.git
+[submodule "external/quickjs"]
+	path = external/quickjs
+	url = https://github.com/bellard/quickjs.git
