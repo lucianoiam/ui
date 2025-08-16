@@ -23,14 +23,12 @@ if [ ! -x "$GN_BIN" ]; then
     chmod +x "$GN_BIN"
 fi
 
-echo "Configuring Skia build..."
 "$GN_BIN" gen out/Static --args='
     is_official_build=true
     is_debug=false
     is_component_build=false
 
     skia_use_vulkan=true
-
     skia_use_system_libpng=false
     skia_use_system_icu=false
     skia_use_system_expat=false
@@ -42,7 +40,12 @@ echo "Configuring Skia build..."
     skia_use_libwebp_decode=false
     skia_use_libwebp_encode=false
 
+    skia_enable_tools=false
     skia_enable_pdf=false
+
+    cc="clang"
+    cxx="clang++"
+    extra_cflags=["-I/Users/luciano/src/ui/external/skia/third_party/libpng", "-I/Users/luciano/src/ui/external/skia/third_party/externals/libpng"]
 '
 
 echo "Building Skia..."
