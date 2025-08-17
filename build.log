@@ -1,0 +1,14 @@
+src/hello_world.mm:304:4: error: unknown type name 'SkiaView'
+  304 |    SkiaView *view = [[SkiaView alloc] initWithFrame:frame];
+      |    ^
+src/hello_world.mm:304:23: error: use of undeclared identifier 'SkiaView'
+  304 |    SkiaView *view = [[SkiaView alloc] initWithFrame:frame];
+      |                       ^
+2 errors generated.
+src/SkiaDisplay.mm:20:14: error: variable has incomplete type 'SkPixmap'
+   20 |     SkPixmap pixmap;
+      |              ^
+external/skia/include/core/SkImage.h:34:7: note: forward declaration of 'SkPixmap'
+   34 | class SkPixmap;
+      |       ^
+1 error generated.

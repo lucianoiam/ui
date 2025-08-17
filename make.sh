@@ -1,7 +1,6 @@
 #!/bin/bash
-set -e
 
-c++ -std=c++17 src/hello_world.cpp -o hello_world \
+c++ -std=c++17 src/hello_world.mm src/SkiaDisplay.mm -o hello_world \
   -Iexternal \
   -Iexternal/skia \
   -Iexternal/yoga \
@@ -11,6 +10,7 @@ c++ -std=c++17 src/hello_world.cpp -o hello_world \
   external/lexbor/build/liblexbor_static.a \
   external/quickjs/libquickjs.a \
   -lpthread -lm \
+  -framework Cocoa \
   -framework CoreFoundation \
   -framework CoreGraphics \
   -framework CoreText \
