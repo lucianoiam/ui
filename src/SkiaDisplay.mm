@@ -61,9 +61,11 @@ void display_skia_image(sk_sp<SkImage> image, int width, int height) {
             [app setDelegate:delegate];
         }
 
-        // Basic menu so Cmd+Q works
-    if (![NSApp mainMenu]) {
+        // Menu bar with Application (Cmd+Q) and Window (Cmd+W) -> close -> exit app
+        if (![NSApp mainMenu]) {
             NSMenu *menubar = [[NSMenu alloc] initWithTitle:@""];
+
+            // Application menu
             NSMenuItem *appItem = [[NSMenuItem alloc] initWithTitle:@"" action:NULL keyEquivalent:@""];
             [menubar addItem:appItem];
             NSMenu *appMenu = [[NSMenu alloc] initWithTitle:@"Application"];
@@ -73,6 +75,16 @@ void display_skia_image(sk_sp<SkImage> image, int width, int height) {
             [quitItem setKeyEquivalentModifierMask:NSEventModifierFlagCommand];
             [appMenu addItem:quitItem];
             [appItem setSubmenu:appMenu];
+
+            // Window menu with Close (Cmd+W). Closing last window triggers termination via delegate.
+            NSMenuItem *windowItem = [[NSMenuItem alloc] initWithTitle:@"" action:NULL keyEquivalent:@""];
+            [menubar addItem:windowItem];
+            NSMenu *windowMenu = [[NSMenu alloc] initWithTitle:@"Window"];
+            NSMenuItem *closeItem = [[NSMenuItem alloc] initWithTitle:@"Close Window" action:@selector(performClose:) keyEquivalent:@"w"];
+            [closeItem setKeyEquivalentModifierMask:NSEventModifierFlagCommand];
+            [windowMenu addItem:closeItem];
+            [windowItem setSubmenu:windowMenu];
+
             [NSApp setMainMenu:menubar];
         }
         NSRect frame = NSMakeRect(0, 0, width, height);
