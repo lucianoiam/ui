@@ -41,9 +41,11 @@ INCLUDES=(
   -I"$ROOT_DIR/external/lexbor/source"
 )
 
+# C++ sources
 SOURCES=(
-  "$SRC_DIR/hello_world.mm"
+  "$SRC_DIR/main.mm"
   "$SRC_DIR/SkiaDisplay.mm"
+  "$SRC_DIR/preact_js.cpp"
 )
 
 LIBS=(
@@ -58,9 +60,10 @@ LIBS=(
   -framework CoreText
   -framework CoreServices
   -framework ApplicationServices
+  -framework JavaScriptCore
 )
 
-echo "Building -> $OUT_BIN"
+echo "Linking -> $OUT_BIN"
 "$CXX" $STD "${SOURCES[@]}" "${INCLUDES[@]}" "${LIBS[@]}" -o "$OUT_BIN"
 echo "Done: $OUT_BIN"
 echo "Running..."
