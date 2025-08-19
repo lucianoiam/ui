@@ -263,14 +263,18 @@ static JSValue make_node(JSContext *ctx, const char *name, int type, JSValue own
     JS_SetPropertyStr(ctx, obj, "_childNodes", JS_NewArray(ctx));
     JS_SetPropertyStr(ctx, obj, "_parentNode", JS_NULL);
     JS_SetPropertyStr(ctx, obj, "_nodeValue", JS_NULL);
-    JS_SetPropertyStr(ctx, obj, "_attributes", JS_NewObject(ctx));
+    JSValue attrs = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "_attributes", JS_DupValue(ctx, attrs));
     JS_SetPropertyStr(ctx, obj, "_ownerDocument", JS_DupValue(ctx, ownerDoc));
     // Add style property for element nodes (nodeType 1)
     if (type == 1) {
         JSValue style = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, style, "cssText", JS_NewString(ctx, ""));
         JS_SetPropertyStr(ctx, obj, "style", style);
+        // Add class property for element nodes
+        JS_SetPropertyStr(ctx, obj, "class", JS_NewString(ctx, ""));
     }
+    JS_FreeValue(ctx, attrs);
     return obj;
 }
 
@@ -350,7 +354,8 @@ function printNode(node, indent = '') {
     if (node.nodeType === 1) {
         let style = node.style && node.style.cssText ? node.style.cssText : '';
         let styleAttr = style.length > 0 ? " style=\"" + style + "\"" : "";
-        s += indent + '<' + node._nodeName.toLowerCase() + styleAttr + '>' + '\n';
+        let className = node.class && node.class.length > 0 ? " class=\"" + node.class + "\"" : "";
+        s += indent + '<' + node._nodeName.toLowerCase() + className + styleAttr + '>' + '\n';
         for (let child of node.childNodes) {
             s += printNode(child, indent + '  ');
         }
