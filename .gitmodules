@@ -7,3 +7,6 @@
 [submodule "external/yoga"]
 	path = external/yoga
 	url = https://github.com/facebook/yoga.git
+[submodule "external/quickjs"]
+	path = external/quickjs
+	url = https://github.com/quickjs-ng/quickjs
