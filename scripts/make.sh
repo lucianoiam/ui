@@ -15,7 +15,7 @@ SRC_DIR="$ROOT_DIR/src"
 SKIA_LIB="$BUILD_DIR/skia/libskia.a"
 YOGA_LIB="$BUILD_DIR/yoga/libyogacore.a"
 LEXBOR_LIB="$BUILD_DIR/lexbor/liblexbor_static.a"
-QUICKJS_LIB="$BUILD_DIR/quickjs/libquickjs.a"
+QUICKJS_LIB="$BUILD_DIR/quickjs/libqjs.a"
 
 missing=()
 for lib in "$SKIA_LIB" "$YOGA_LIB" "$LEXBOR_LIB" "$QUICKJS_LIB"; do
@@ -35,8 +35,8 @@ CXX=${CXX:-c++}
 STD="-std=c++17"
 
 INCLUDES=(
-  -I"$ROOT_DIR/external"
   -I"$ROOT_DIR/external/skia"
+  -I"$ROOT_DIR/external/quickjs"
   -I"$ROOT_DIR/external/yoga"
   -I"$ROOT_DIR/external/lexbor/source"
 )
@@ -67,6 +67,4 @@ echo "Linking -> $OUT_BIN"
 "$CXX" $STD "${SOURCES[@]}" "${INCLUDES[@]}" "${LIBS[@]}" -o "$OUT_BIN"
 echo "Done: $OUT_BIN"
 echo "Running..."
-"$OUT_BIN" &
-APP_PID=$!
-echo "(launched pid $APP_PID)"
+"$OUT_BIN"

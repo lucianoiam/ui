@@ -47,10 +47,11 @@ build_quickjs() {
   local QJS_DIR="$ROOT_DIR/external/quickjs"
   local OUT_DIR="$OUT_ROOT/quickjs"
   [ -d "$QJS_DIR" ] || { echo "QuickJS dir missing: $QJS_DIR"; return 1; }
-  mkdir -p "$OUT_DIR"; echo "[quickjs] make";
-  (cd "$QJS_DIR" && make -j$(cpu_count) libquickjs.a)
-  cp "$QJS_DIR/libquickjs.a" "$OUT_DIR/"
-  echo "[quickjs] done"
+  mkdir -p "$OUT_DIR"; echo "[quickjs-ng] cmake build";
+  (cd "$QJS_DIR" && cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-DNDEBUG")
+  (cd "$QJS_DIR" && cmake --build build --config Release)
+  cp "$QJS_DIR/build/libqjs.a" "$OUT_DIR/"
+  echo "[quickjs-ng] done"
 }
 
 build_all() { build_skia; build_yoga; build_lexbor; build_quickjs; echo "[all] outputs -> $OUT_ROOT"; }

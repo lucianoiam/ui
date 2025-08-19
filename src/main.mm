@@ -1,5 +1,4 @@
-// https://github.com/bellard/quickjs/issues/277
-#include <quickjs/quickjs.h>
+#include <quickjs.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -63,7 +62,7 @@ static void remove_from_parent(JSContext *ctx, JSValue node) {
         int len = JS_Length(ctx, arr);
         for (int i = 0; i < len; i++) {
             JSValue child = JS_GetPropertyUint32(ctx, arr, i);
-            if (JS_StrictEq(ctx, child, node)) {
+            if (JS_IsStrictEqual(ctx, child, node)) {
                 for (int j = i; j < len - 1; j++) {
                     JSValue next = JS_GetPropertyUint32(ctx, arr, j + 1);
                     JS_SetPropertyUint32(ctx, arr, j, JS_DupValue(ctx, next));
@@ -160,7 +159,7 @@ static JSValue fn_insertBefore(JSContext *ctx, JSValueConst this_val, int argc, 
     if (argc > 1 && !JS_IsNull(argv[1]) && !JS_IsUndefined(argv[1])) {
         for (int i = 0; i < len; i++) {
             JSValue child = JS_GetPropertyUint32(ctx, arr, i);
-            if (JS_StrictEq(ctx, child, argv[1])) {
+            if (JS_IsStrictEqual(ctx, child, argv[1])) {
                 index = i;
                 JS_FreeValue(ctx, child);
                 break;
@@ -187,7 +186,7 @@ static JSValue fn_removeChild(JSContext *ctx, JSValueConst this_val, int argc, J
     int len = JS_Length(ctx, arr);
     for (int i = 0; i < len; i++) {
         JSValue child = JS_GetPropertyUint32(ctx, arr, i);
-        if (JS_StrictEq(ctx, child, argv[0])) {
+    if (JS_IsStrictEqual(ctx, child, argv[0])) {
             for (int j = i; j < len - 1; j++) {
                 JSValue next = JS_GetPropertyUint32(ctx, arr, j + 1);
                 JS_SetPropertyUint32(ctx, arr, j, JS_DupValue(ctx, next));
@@ -213,7 +212,7 @@ static JSValue fn_replaceChild(JSContext *ctx, JSValueConst this_val, int argc, 
     int len = JS_Length(ctx, arr);
     for (int i = 0; i < len; i++) {
         JSValue child = JS_GetPropertyUint32(ctx, arr, i);
-        if (JS_StrictEq(ctx, child, argv[1])) {
+    if (JS_IsStrictEqual(ctx, child, argv[1])) {
             remove_from_parent(ctx, (JSValue)argv[0]);
             JS_SetPropertyUint32(ctx, arr, i, JS_DupValue(ctx, argv[0]));
             JS_SetPropertyStr(ctx, (JSValue)argv[0], "_parentNode", JS_DupValue(ctx, this_val));
