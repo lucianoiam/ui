@@ -265,6 +265,12 @@ static JSValue make_node(JSContext *ctx, const char *name, int type, JSValue own
     JS_SetPropertyStr(ctx, obj, "_nodeValue", JS_NULL);
     JS_SetPropertyStr(ctx, obj, "_attributes", JS_NewObject(ctx));
     JS_SetPropertyStr(ctx, obj, "_ownerDocument", JS_DupValue(ctx, ownerDoc));
+    // Add style property for element nodes (nodeType 1)
+    if (type == 1) {
+        JSValue style = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, style, "cssText", JS_NewString(ctx, ""));
+        JS_SetPropertyStr(ctx, obj, "style", style);
+    }
     return obj;
 }
 
@@ -323,35 +329,39 @@ int main() {
     JS_FreeValue(ctx, r);
 
     // Render Preact app
-    const char *script =
-        "const { h, render } = preact;\n"
-        "function App() {\n"
-        "  return h('div', { class: 'container' }, [\n"
-        "    h('h1', null, 'Hello World!'),\n"
-        "    h('p', null, 'This is a Preact app in QuickJS')\n"
-        "  ]);\n"
-        "}\n"
-        "render(h(App), document.body);\n";
+        const char *script = R"JS(
+const { h, render } = preact;
+function App() {
+    return h('div', { class: 'container' }, [
+        h('h1', null, 'Hello World!'),
+        h('p', { style: 'color: blue; font-weight: bold;' }, 'This is a Preact app in QuickJS')
+    ]);
+}
+render(h(App), document.body);
+)JS";
     r = JS_Eval(ctx, script, strlen(script), "<app>", JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(r)) dump_exception(ctx);
     JS_FreeValue(ctx, r);
 
     // Serialize DOM tree
-    const char *print_dom =
-        "function printNode(node, indent = '') {\n"
-        "  let s = '';\n"
-        "  if (node.nodeType === 1) {\n"
-        "    s += indent + '<' + node._nodeName.toLowerCase() + '>' + '\\n';\n"
-        "    for (let child of node.childNodes) {\n"
-        "      s += printNode(child, indent + '  ');\n"
-        "    }\n"
-        "    s += indent + '</' + node._nodeName.toLowerCase() + '>' + '\\n';\n"
-        "  } else if (node.nodeType === 3) {\n"
-        "    s += indent + node.nodeValue + '\\n';\n"
-        "  }\n"
-        "  return s;\n"
-        "}\n"
-        "console.log(printNode(document.body));\n";
+        const char *print_dom = R"JS(
+function printNode(node, indent = '') {
+    let s = '';
+    if (node.nodeType === 1) {
+        let style = node.style && node.style.cssText ? node.style.cssText : '';
+        let styleAttr = style.length > 0 ? " style=\"" + style + "\"" : "";
+        s += indent + '<' + node._nodeName.toLowerCase() + styleAttr + '>' + '\n';
+        for (let child of node.childNodes) {
+            s += printNode(child, indent + '  ');
+        }
+        s += indent + '</' + node._nodeName.toLowerCase() + '>' + '\n';
+    } else if (node.nodeType === 3) {
+        s += indent + node.nodeValue + '\n';
+    }
+    return s;
+}
+console.log(printNode(document.body));
+)JS";
     r = JS_Eval(ctx, print_dom, strlen(print_dom), "<print_dom>", JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(r)) dump_exception(ctx);
     JS_FreeValue(ctx, r);
