@@ -117,6 +117,7 @@ static JSValue getter_attributes(JSContext *ctx, JSValueConst this_val) {
 }
 
 static JSValue fn_setAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    printf("[DOM] setAttribute called\n");
     if (argc < 2) return JS_ThrowTypeError(ctx, "setAttribute: Expected name and value");
     const char *name = JS_ToCString(ctx, argv[0]);
     JSValue attrs = JS_GetPropertyStr(ctx, this_val, "_attributes");
@@ -127,6 +128,7 @@ static JSValue fn_setAttribute(JSContext *ctx, JSValueConst this_val, int argc, 
 }
 
 static JSValue fn_getAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    printf("[DOM] getAttribute called\n");
     if (argc < 1) return JS_ThrowTypeError(ctx, "getAttribute: Expected name");
     const char *name = JS_ToCString(ctx, argv[0]);
     JSValue attrs = JS_GetPropertyStr(ctx, this_val, "_attributes");
@@ -137,6 +139,7 @@ static JSValue fn_getAttribute(JSContext *ctx, JSValueConst this_val, int argc, 
 }
 
 static JSValue fn_appendChild(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    printf("[DOM] appendChild called\n");
     if (argc < 1 || JS_IsNull(argv[0]) || JS_IsUndefined(argv[0])) {
         return JS_ThrowTypeError(ctx, "appendChild: Invalid node");
     }
@@ -149,6 +152,7 @@ static JSValue fn_appendChild(JSContext *ctx, JSValueConst this_val, int argc, J
 }
 
 static JSValue fn_insertBefore(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    printf("[DOM] insertBefore called\n");
     if (argc < 1 || JS_IsNull(argv[0]) || JS_IsUndefined(argv[0])) {
         return JS_ThrowTypeError(ctx, "insertBefore: Invalid node");
     }
@@ -179,6 +183,7 @@ static JSValue fn_insertBefore(JSContext *ctx, JSValueConst this_val, int argc, 
 }
 
 static JSValue fn_removeChild(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    printf("[DOM] removeChild called\n");
     if (argc < 1 || JS_IsNull(argv[0]) || JS_IsUndefined(argv[0])) {
         return JS_ThrowTypeError(ctx, "removeChild: Invalid node");
     }
@@ -205,6 +210,7 @@ static JSValue fn_removeChild(JSContext *ctx, JSValueConst this_val, int argc, J
 }
 
 static JSValue fn_replaceChild(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    printf("[DOM] replaceChild called\n");
     if (argc < 2 || JS_IsNull(argv[0]) || JS_IsUndefined(argv[0]) || JS_IsNull(argv[1]) || JS_IsUndefined(argv[1])) {
         return JS_ThrowTypeError(ctx, "replaceChild: Invalid nodes");
     }
