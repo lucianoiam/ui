@@ -53,6 +53,12 @@ static void define_console(JSContext *ctx) {
 
 // Node prototype and methods
 static JSValue node_proto;
+JSClassID dom_class_id = 0;
+
+// Finalizer for DOM objects
+static void dom_object_finalizer(JSRuntime *rt, JSValue val) {
+    printf("[DOM] object destroyed\n");
+}
 
 // Remove from parent function (defined before usage)
 static void remove_from_parent(JSContext *ctx, JSValue node) {
@@ -234,7 +240,17 @@ static JSValue fn_replaceChild(JSContext *ctx, JSValueConst this_val, int argc, 
 }
 
 static void define_node_proto(JSContext *ctx) {
+    // Define a JSClass with a finalizer for DOM nodes
+    static JSClassDef dom_class = {
+        "DOMNode",
+        .finalizer = dom_object_finalizer
+    };
+    if (dom_class_id == 0) {
+        JS_NewClassID(JS_GetRuntime(ctx), &dom_class_id);
+        JS_NewClass(JS_GetRuntime(ctx), dom_class_id, &dom_class);
+    }
     node_proto = JS_NewObject(ctx);
+    JS_SetClassProto(ctx, dom_class_id, node_proto);
 
     auto define_prop = [&](const char *name, JSCFunctionMagic *getter, JSCFunctionMagic *setter = nullptr) {
         JSAtom atom = JS_NewAtom(ctx, name);
@@ -262,7 +278,7 @@ static void define_node_proto(JSContext *ctx) {
 }
 
 static JSValue make_node(JSContext *ctx, const char *name, int type, JSValue ownerDoc) {
-    JSValue obj = JS_NewObject(ctx);
+    JSValue obj = JS_NewObjectClass(ctx, dom_class_id);
     JS_SetPrototype(ctx, obj, node_proto);
     JS_SetPropertyStr(ctx, obj, "_nodeName", JS_NewString(ctx, name));
     JS_SetPropertyStr(ctx, obj, "_nodeType", JS_NewInt32(ctx, type));
@@ -377,8 +393,21 @@ console.log(printNode(document.body));
     if (JS_IsException(r)) dump_exception(ctx);
     JS_FreeValue(ctx, r);
 
+    // Remove document and body from global object to break references
+    JS_SetPropertyStr(ctx, global, "document", JS_UNDEFINED);
+    JS_SetPropertyStr(ctx, document, "body", JS_UNDEFINED);
+
+    // Explicitly free all global JSValue references
+    JS_FreeValue(ctx, body);
+    JS_FreeValue(ctx, document);
     JS_FreeValue(ctx, global);
+
+    // Run GC multiple times to ensure collection
+    for (int i = 0; i < 3; ++i) {
+        JS_RunGC(rt);
+    }
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
+    fflush(stdout); // Ensure all logs are printed
     return 0;
 }
