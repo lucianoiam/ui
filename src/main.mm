@@ -5,26 +5,7 @@
 #include <sys/time.h>
 #include "fake_dom.h"
 
-// Static C functions for JS_NewCFunction (must be at file scope)
-static JSValue js_createElement(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    const char *tag = JS_ToCString(ctx, argv[0]);
-    JSValue el = fake_dom_make_node(ctx, tag, 1, this_val);
-    JS_FreeCString(ctx, tag);
-    return el;
-}
-static JSValue js_createElementNS(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    const char *tag = JS_ToCString(ctx, argv[1]);
-    JSValue el = fake_dom_make_node(ctx, tag, 1, this_val);
-    JS_FreeCString(ctx, tag);
-    return el;
-}
-static JSValue js_createTextNode(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    const char *txt = JS_ToCString(ctx, argv[0]);
-    JSValue t = fake_dom_make_node(ctx, "#text", 3, this_val);
-    JS_SetPropertyStr(ctx, t, "_nodeValue", JS_NewString(ctx, txt));
-    JS_FreeCString(ctx, txt);
-    return t;
-}
+
 
 
 

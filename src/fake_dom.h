@@ -6,6 +6,11 @@ extern "C" {
 #endif
 void fake_dom_define_node_proto(JSContext *ctx);
 JSValue fake_dom_make_node(JSContext *ctx, const char *name, int type, JSValue ownerDoc);
+
+// DOM creation functions for JS
+JSValue js_createElement(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+JSValue js_createElementNS(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+JSValue js_createTextNode(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 #ifdef __cplusplus
 }
 #endif
