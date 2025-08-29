@@ -10,3 +10,6 @@
 [submodule "external/quickjs"]
 	path = external/quickjs
 	url = https://github.com/quickjs-ng/quickjs
+[submodule "external/preact"]
+	path = external/preact
+	url = https://github.com/preactjs/preact

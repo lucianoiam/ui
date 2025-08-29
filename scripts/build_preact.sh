@@ -1,0 +1,36 @@
+#!/bin/bash
+# Clone Preact and build UMD bundles (unminified, uncompressed) for core and hooks
+# Usage: bash scripts/build_preact.sh
+
+set -e
+
+PREACT_DIR="external/preact"
+
+
+if [ ! -d "$PREACT_DIR" ]; then
+  echo "Error: $PREACT_DIR does not exist. Please initialize the submodule first."
+  exit 1
+fi
+
+cd "$PREACT_DIR"
+
+# Install dependencies
+if [ ! -d "node_modules" ]; then
+  npm install
+fi
+
+# Build preact core UMD (unminified, uncompressed)
+npx microbundle build --no-minify --no-compress -f umd --cwd .
+
+# Build preact hooks UMD (unminified, uncompressed)
+npx microbundle build --no-minify --no-compress -f umd --cwd hooks
+
+# Copy resulting UMD files to src/
+cd - > /dev/null
+cp external/preact/dist/preact.umd.js src/preact.js
+cp external/preact/hooks/dist/hooks.umd.js src/preact_hooks.js
+
+echo "Preact and hooks UMD builds complete."
+echo "Preact and hooks UMD builds complete and copied to src/."
+
+echo "Preact and hooks UMD builds complete."
