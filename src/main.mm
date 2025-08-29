@@ -102,14 +102,14 @@ int main() {
     }, "requestAnimationFrame", 1));
 
 
-    // Load and run preact.js from disk
+    // Load and run preact.min.js from disk
     size_t preact_js_len = 0;
-    char *preact_js = load_file("src/preact.js", &preact_js_len);
+    char *preact_js = load_file("src/preact.min.js", &preact_js_len);
     if (!preact_js) {
-        fprintf(stderr, "Failed to load src/preact.js\n");
+        fprintf(stderr, "Failed to load src/preact.min.js\n");
         return 1;
     }
-    JSValue r = JS_Eval(ctx, preact_js, preact_js_len, "src/preact.js", JS_EVAL_TYPE_GLOBAL);
+    JSValue r = JS_Eval(ctx, preact_js, preact_js_len, "src/preact.min.js", JS_EVAL_TYPE_GLOBAL);
     free(preact_js);
     if (JS_IsException(r)) dump_exception(ctx);
     JS_FreeValue(ctx, r);
