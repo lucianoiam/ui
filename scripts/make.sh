@@ -65,8 +65,22 @@ LIBS=(
   -framework JavaScriptCore
 )
 
+
+# Compile C and C++/ObjC++ sources separately to object files
+OBJ_FILES=()
+for src in "${SOURCES[@]}"; do
+  ext="${src##*.}"
+  obj="$BUILD_DIR/$(basename "$src" | sed 's/\.[^.]*$/.o/')"
+  if [[ "$ext" == "c" ]]; then
+    clang -c "$src" "${INCLUDES[@]}" -o "$obj"
+  else
+    "$CXX" -c $STD "$src" "${INCLUDES[@]}" -o "$obj"
+  fi
+  OBJ_FILES+=("$obj")
+done
+
 echo "Linking -> $OUT_BIN"
-"$CXX" $STD "${SOURCES[@]}" "${INCLUDES[@]}" "${LIBS[@]}" -o "$OUT_BIN"
+"$CXX" $STD "${OBJ_FILES[@]}" "${LIBS[@]}" -o "$OUT_BIN"
 echo "Done: $OUT_BIN"
 echo "Running..."
 "$OUT_BIN"
