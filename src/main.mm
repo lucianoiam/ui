@@ -4,7 +4,7 @@
 #include <sys/time.h>
 #include <stdbool.h>
 #include "fake_dom.h"
-#include "fake_host.h"
+#include "fake_globals.h"
 
 
 // Uncomment to enable each test
@@ -63,7 +63,7 @@ int main() {
     double elapsed;
     JSRuntime *rt = JS_NewRuntime();
     JSContext *ctx = JS_NewContext(rt);
-    fake_define_console(ctx);
+    define_fake_globals(ctx);
     fake_dom_define_node_proto(ctx);
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue document = JS_NewObject(ctx);
@@ -76,43 +76,7 @@ int main() {
     JS_SetPropertyStr(ctx, global, "window", JS_DupValue(ctx, global));
     JS_SetPropertyStr(ctx, global, "self", JS_DupValue(ctx, global));
     JS_SetPropertyStr(ctx, global, "globalThis", JS_DupValue(ctx, global));
-    JS_SetPropertyStr(ctx, global, "requestAnimationFrame", JS_NewCFunction(ctx, [](JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-        if (argc > 0 && JS_IsFunction(ctx, argv[0])) {
-            JSValue result = JS_Call(ctx, argv[0], JS_UNDEFINED, 0, NULL);
-            if (JS_IsException(result)) dump_exception(ctx);
-            JS_FreeValue(ctx, result);
-        }
-        return JS_NewInt32(ctx, 0);
-    }, "requestAnimationFrame", 1));
-
-    // Provide setTimeout and clearTimeout as immediate/no-op for Preact Hooks compatibility
-    JS_SetPropertyStr(ctx, global, "setTimeout", JS_NewCFunction(ctx, [](JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-        if (argc > 0 && JS_IsFunction(ctx, argv[0])) {
-            JSValue result = JS_Call(ctx, argv[0], JS_UNDEFINED, 0, NULL);
-            if (JS_IsException(result)) dump_exception(ctx);
-            JS_FreeValue(ctx, result);
-        }
-        return JS_NewInt32(ctx, 0); // fake timer id
-    }, "setTimeout", 1));
-    JS_SetPropertyStr(ctx, global, "clearTimeout", JS_NewCFunction(ctx, [](JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-        return JS_UNDEFINED;
-    }, "clearTimeout", 1));
-    JS_SetPropertyStr(ctx, global, "cancelAnimationFrame", JS_NewCFunction(ctx, [](JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-        return JS_UNDEFINED;
-    }, "cancelAnimationFrame", 1));
-
-    // Provide setInterval and clearInterval as immediate/no-op for compatibility
-    JS_SetPropertyStr(ctx, global, "setInterval", JS_NewCFunction(ctx, [](JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-        if (argc > 0 && JS_IsFunction(ctx, argv[0])) {
-            JSValue result = JS_Call(ctx, argv[0], JS_UNDEFINED, 0, NULL);
-            if (JS_IsException(result)) dump_exception(ctx);
-            JS_FreeValue(ctx, result);
-        }
-        return JS_NewInt32(ctx, 0); // fake timer id
-    }, "setInterval", 1));
-    JS_SetPropertyStr(ctx, global, "clearInterval", JS_NewCFunction(ctx, [](JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-        return JS_UNDEFINED;
-    }, "clearInterval", 1));
+    // ...globals now defined by define_fake_globals
     size_t preact_js_len = 0;
     char *preact_js = load_file("src/preact.js", &preact_js_len);
     if (!preact_js) {

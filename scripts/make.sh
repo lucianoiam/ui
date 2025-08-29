@@ -46,7 +46,7 @@ SOURCES=(
   "$SRC_DIR/main.mm"
   "$SRC_DIR/SkiaDisplay.mm"
   "$SRC_DIR/fake_dom.c"
-  "$SRC_DIR/fake_host.c"
+  "$SRC_DIR/fake_globals.c"
 )
 
 LIBS=(
