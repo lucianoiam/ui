@@ -1,8 +1,17 @@
+
 // fake_dom.c - Modularized fake DOM for QuickJS/Preact emulation
 #include <quickjs.h>
 #include "fake_dom.h"
 #include <stdio.h>
 #include <string.h>
+
+// No-op event methods for fake DOM compatibility with Preact
+static JSValue fn_addEventListener(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return JS_UNDEFINED;
+}
+static JSValue fn_removeEventListener(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return JS_UNDEFINED;
+}
 
 // DOM creation functions for JS
 JSValue js_createElement(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
@@ -250,6 +259,8 @@ void fake_dom_define_node_proto(JSContext *ctx) {
     JS_SetPropertyStr(ctx, node_proto, "replaceChild", JS_NewCFunction(ctx, fn_replaceChild, "replaceChild", 2));
     JS_SetPropertyStr(ctx, node_proto, "setAttribute", JS_NewCFunction(ctx, fn_setAttribute, "setAttribute", 2));
     JS_SetPropertyStr(ctx, node_proto, "getAttribute", JS_NewCFunction(ctx, fn_getAttribute, "getAttribute", 1));
+    JS_SetPropertyStr(ctx, node_proto, "addEventListener", JS_NewCFunction(ctx, fn_addEventListener, "addEventListener", 2));
+    JS_SetPropertyStr(ctx, node_proto, "removeEventListener", JS_NewCFunction(ctx, fn_removeEventListener, "removeEventListener", 2));
 }
 
 JSValue fake_dom_make_node(JSContext *ctx, const char *name, int type, JSValue ownerDoc) {

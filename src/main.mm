@@ -8,7 +8,7 @@
 
 
 // Uncomment to enable each test
-#define ENABLE_TEST_1
+//#define ENABLE_TEST_1
 #define ENABLE_TEST_2
 
 static void dump_exception(JSContext *ctx) {
@@ -84,6 +84,35 @@ int main() {
         }
         return JS_NewInt32(ctx, 0);
     }, "requestAnimationFrame", 1));
+
+    // Provide setTimeout and clearTimeout as immediate/no-op for Preact Hooks compatibility
+    JS_SetPropertyStr(ctx, global, "setTimeout", JS_NewCFunction(ctx, [](JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+        if (argc > 0 && JS_IsFunction(ctx, argv[0])) {
+            JSValue result = JS_Call(ctx, argv[0], JS_UNDEFINED, 0, NULL);
+            if (JS_IsException(result)) dump_exception(ctx);
+            JS_FreeValue(ctx, result);
+        }
+        return JS_NewInt32(ctx, 0); // fake timer id
+    }, "setTimeout", 1));
+    JS_SetPropertyStr(ctx, global, "clearTimeout", JS_NewCFunction(ctx, [](JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+        return JS_UNDEFINED;
+    }, "clearTimeout", 1));
+    JS_SetPropertyStr(ctx, global, "cancelAnimationFrame", JS_NewCFunction(ctx, [](JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+        return JS_UNDEFINED;
+    }, "cancelAnimationFrame", 1));
+
+    // Provide setInterval and clearInterval as immediate/no-op for compatibility
+    JS_SetPropertyStr(ctx, global, "setInterval", JS_NewCFunction(ctx, [](JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+        if (argc > 0 && JS_IsFunction(ctx, argv[0])) {
+            JSValue result = JS_Call(ctx, argv[0], JS_UNDEFINED, 0, NULL);
+            if (JS_IsException(result)) dump_exception(ctx);
+            JS_FreeValue(ctx, result);
+        }
+        return JS_NewInt32(ctx, 0); // fake timer id
+    }, "setInterval", 1));
+    JS_SetPropertyStr(ctx, global, "clearInterval", JS_NewCFunction(ctx, [](JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+        return JS_UNDEFINED;
+    }, "clearInterval", 1));
     size_t preact_js_len = 0;
     char *preact_js = load_file("src/preact.js", &preact_js_len);
     if (!preact_js) {
@@ -94,6 +123,24 @@ int main() {
     free(preact_js);
     if (JS_IsException(r)) dump_exception(ctx);
     JS_FreeValue(ctx, r);
+    // Load preact_hooks.js (UMD) after preact.js
+    size_t hooks_js_len = 0;
+    char *hooks_js = load_file("src/preact_hooks.js", &hooks_js_len);
+    if (!hooks_js) {
+        fprintf(stderr, "Failed to load src/preact_hooks.js\n");
+        return 1;
+    }
+    r = JS_Eval(ctx, hooks_js, hooks_js_len, "src/preact_hooks.js", JS_EVAL_TYPE_GLOBAL);
+    free(hooks_js);
+    if (JS_IsException(r)) dump_exception(ctx);
+    JS_FreeValue(ctx, r);
+
+    // Assign preactHooks to preact.hooks if defined
+    const char *assign_hooks = "if (typeof preactHooks !== 'undefined') preact.hooks = preactHooks;";
+    r = JS_Eval(ctx, assign_hooks, strlen(assign_hooks), "<assign_hooks>", JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(r)) dump_exception(ctx);
+    JS_FreeValue(ctx, r);
+
     double elapsed1 = -1.0, elapsed2 = -1.0;
 #ifdef ENABLE_TEST_1
     elapsed1 = run_test(ctx, "src/test_app_1.js");
