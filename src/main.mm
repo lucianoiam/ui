@@ -26,9 +26,7 @@ static JSValue js_createTextNode(JSContext *ctx, JSValueConst this_val, int argc
     return t;
 }
 
-// Forward declaration for Preact source (assumed defined elsewhere)
-extern const char preact_js[];
-extern const unsigned int preact_js_len;
+
 
 // Utility to get array length
 
@@ -103,8 +101,16 @@ int main() {
         return JS_NewInt32(ctx, 0);
     }, "requestAnimationFrame", 1));
 
-    // Evaluate Preact
-    JSValue r = JS_Eval(ctx, preact_js, preact_js_len, "<preact>", JS_EVAL_TYPE_GLOBAL);
+
+    // Load and run preact.js from disk
+    size_t preact_js_len = 0;
+    char *preact_js = load_file("src/preact.js", &preact_js_len);
+    if (!preact_js) {
+        fprintf(stderr, "Failed to load src/preact.js\n");
+        return 1;
+    }
+    JSValue r = JS_Eval(ctx, preact_js, preact_js_len, "src/preact.js", JS_EVAL_TYPE_GLOBAL);
+    free(preact_js);
     if (JS_IsException(r)) dump_exception(ctx);
     JS_FreeValue(ctx, r);
 
