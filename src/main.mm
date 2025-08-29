@@ -71,19 +71,37 @@ int main() {
     free(preact_js);
     if (JS_IsException(r)) dump_exception(ctx);
     JS_FreeValue(ctx, r);
-    size_t react_app_js_len = 0;
-    char *react_app_js = load_file("src/react_app.js", &react_app_js_len);
-    if (!react_app_js) {
-        fprintf(stderr, "Failed to load src/react_app.js\n");
+    // Run brute force stress test (test_app_1.js)
+    size_t test1_js_len = 0;
+    char *test1_js = load_file("src/test_app_1.js", &test1_js_len);
+    if (!test1_js) {
+        fprintf(stderr, "Failed to load src/test_app_1.js\n");
         return 1;
     }
     gettimeofday(&start, NULL);
-    r = JS_Eval(ctx, react_app_js, react_app_js_len, "src/react_app.js", JS_EVAL_TYPE_GLOBAL);
-    free(react_app_js);
+    r = JS_Eval(ctx, test1_js, test1_js_len, "src/test_app_1.js", JS_EVAL_TYPE_GLOBAL);
+    free(test1_js);
     if (JS_IsException(r)) dump_exception(ctx);
     JS_FreeValue(ctx, r);
     gettimeofday(&end, NULL);
-    elapsed = (end.tv_sec - start.tv_sec) * 1000.0 + (end.tv_usec - start.tv_usec) / 1000.0;
+    double elapsed1 = (end.tv_sec - start.tv_sec) * 1000.0 + (end.tv_usec - start.tv_usec) / 1000.0;
+
+    // Run complexity stress test (test_app_2.js)
+    size_t test2_js_len = 0;
+    char *test2_js = load_file("src/test_app_2.js", &test2_js_len);
+    if (!test2_js) {
+        fprintf(stderr, "Failed to load src/test_app_2.js\n");
+        return 1;
+    }
+    gettimeofday(&start, NULL);
+    r = JS_Eval(ctx, test2_js, test2_js_len, "src/test_app_2.js", JS_EVAL_TYPE_GLOBAL);
+    free(test2_js);
+    if (JS_IsException(r)) dump_exception(ctx);
+    JS_FreeValue(ctx, r);
+    gettimeofday(&end, NULL);
+    double elapsed2 = (end.tv_sec - start.tv_sec) * 1000.0 + (end.tv_usec - start.tv_usec) / 1000.0;
+
+    // Print DOM after both tests (optional, can be commented out)
     size_t print_dom_js_len = 0;
     char *print_dom_js = load_file("src/print_dom.js", &print_dom_js_len);
     if (!print_dom_js) {
@@ -94,6 +112,7 @@ int main() {
     free(print_dom_js);
     if (JS_IsException(r)) dump_exception(ctx);
     JS_FreeValue(ctx, r);
+
     JS_SetPropertyStr(ctx, global, "document", JS_UNDEFINED);
     JS_SetPropertyStr(ctx, document, "body", JS_UNDEFINED);
     JS_FreeValue(ctx, body);
@@ -103,8 +122,7 @@ int main() {
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
     fflush(stdout);
-    // On a Mac M4 running a typical web browser, this test would take approximately 2-3ms.
-    // This fake implementation takes about 20ms.
-    printf("[BENCHMARK] Preact app + DOM stress test: %.1f ms\n", elapsed);
+    printf("[BENCHMARK] Preact app + DOM brute force test: %.1f ms\n", elapsed1);
+    printf("[BENCHMARK] Preact app + DOM complexity test: %.1f ms\n", elapsed2);
     return 0;
 }
