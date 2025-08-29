@@ -8,7 +8,7 @@
 
 
 // Uncomment to enable each test
-//#define ENABLE_TEST_1
+#define ENABLE_TEST_1
 #define ENABLE_TEST_2
 
 static void dump_exception(JSContext *ctx) {
