@@ -46,6 +46,7 @@ SOURCES=(
   "$SRC_DIR/main.mm"
   "$SRC_DIR/SkiaDisplay.mm"
   "$SRC_DIR/preact_js.cpp"
+  "$SRC_DIR/dom_fake.c"
 )
 
 LIBS=(
