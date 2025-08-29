@@ -30,7 +30,9 @@ cd - > /dev/null
 cp external/preact/dist/preact.umd.js src/preact.js
 cp external/preact/hooks/dist/hooks.umd.js src/preact_hooks.js
 
-echo "Preact and hooks UMD builds complete."
-echo "Preact and hooks UMD builds complete and copied to src/."
+# Clean untracked files from the preact submodule to avoid dirty state
+cd external/preact
+git clean -fdx
+cd - > /dev/null
 
-echo "Preact and hooks UMD builds complete."
+echo "Preact and hooks UMD builds complete, copied to src/, and submodule cleaned."
