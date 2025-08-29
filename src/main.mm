@@ -2,8 +2,14 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/time.h>
+#include <stdbool.h>
 #include "fake_dom.h"
 #include "fake_host.h"
+
+
+// Uncomment to enable each test
+#define ENABLE_TEST_1
+#define ENABLE_TEST_2
 
 static void dump_exception(JSContext *ctx) {
     JSValue ex = JS_GetException(ctx);
@@ -33,6 +39,23 @@ static char *load_file(const char *filename, size_t *out_len) {
     fclose(f);
     if (out_len) *out_len = len;
     return buf;
+}
+
+double run_test(JSContext *ctx, const char *filename) {
+    struct timeval start, end;
+    size_t js_len = 0;
+    char *js = load_file(filename, &js_len);
+    if (!js) {
+        fprintf(stderr, "Failed to load %s\n", filename);
+        return -1.0;
+    }
+    gettimeofday(&start, NULL);
+    JSValue r = JS_Eval(ctx, js, js_len, filename, JS_EVAL_TYPE_GLOBAL);
+    free(js);
+    if (JS_IsException(r)) dump_exception(ctx);
+    JS_FreeValue(ctx, r);
+    gettimeofday(&end, NULL);
+    return (end.tv_sec - start.tv_sec) * 1000.0 + (end.tv_usec - start.tv_usec) / 1000.0;
 }
 
 int main() {
@@ -71,35 +94,13 @@ int main() {
     free(preact_js);
     if (JS_IsException(r)) dump_exception(ctx);
     JS_FreeValue(ctx, r);
-    // Run brute force stress test (test_app_1.js)
-    size_t test1_js_len = 0;
-    char *test1_js = load_file("src/test_app_1.js", &test1_js_len);
-    if (!test1_js) {
-        fprintf(stderr, "Failed to load src/test_app_1.js\n");
-        return 1;
-    }
-    gettimeofday(&start, NULL);
-    r = JS_Eval(ctx, test1_js, test1_js_len, "src/test_app_1.js", JS_EVAL_TYPE_GLOBAL);
-    free(test1_js);
-    if (JS_IsException(r)) dump_exception(ctx);
-    JS_FreeValue(ctx, r);
-    gettimeofday(&end, NULL);
-    double elapsed1 = (end.tv_sec - start.tv_sec) * 1000.0 + (end.tv_usec - start.tv_usec) / 1000.0;
-
-    // Run complexity stress test (test_app_2.js)
-    size_t test2_js_len = 0;
-    char *test2_js = load_file("src/test_app_2.js", &test2_js_len);
-    if (!test2_js) {
-        fprintf(stderr, "Failed to load src/test_app_2.js\n");
-        return 1;
-    }
-    gettimeofday(&start, NULL);
-    r = JS_Eval(ctx, test2_js, test2_js_len, "src/test_app_2.js", JS_EVAL_TYPE_GLOBAL);
-    free(test2_js);
-    if (JS_IsException(r)) dump_exception(ctx);
-    JS_FreeValue(ctx, r);
-    gettimeofday(&end, NULL);
-    double elapsed2 = (end.tv_sec - start.tv_sec) * 1000.0 + (end.tv_usec - start.tv_usec) / 1000.0;
+    double elapsed1 = -1.0, elapsed2 = -1.0;
+#ifdef ENABLE_TEST_1
+    elapsed1 = run_test(ctx, "src/test_app_1.js");
+#endif
+#ifdef ENABLE_TEST_2
+    elapsed2 = run_test(ctx, "src/test_app_2.js");
+#endif
 
     // Print DOM after both tests (optional, can be commented out)
     size_t print_dom_js_len = 0;
@@ -122,7 +123,13 @@ int main() {
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
     fflush(stdout);
-    printf("[BENCHMARK] Preact app + DOM brute force test: %.1f ms\n", elapsed1);
-    printf("[BENCHMARK] Preact app + DOM complexity test: %.1f ms\n", elapsed2);
+    #ifdef ENABLE_TEST_1
+    if (elapsed1 >= 0)
+        printf("[BENCHMARK] Preact app + DOM brute force test: %.1f ms\n", elapsed1);
+    #endif
+    #ifdef ENABLE_TEST_2
+    if (elapsed2 >= 0)
+        printf("[BENCHMARK] Preact app + DOM complexity test: %.1f ms\n", elapsed2);
+    #endif
     return 0;
 }
