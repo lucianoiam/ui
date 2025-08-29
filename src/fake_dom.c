@@ -1,12 +1,12 @@
 #include <quickjs.h>
-// dom_fake.c
+// fake_dom.c
 // Modularized fake DOM for QuickJS/Preact emulation
-#include "dom_fake.h"
+#include "fake_dom.h"
 #include <stdio.h>
 #include <string.h>
 
 static JSValue node_proto;
-static JSClassID dom_class_id = 0;
+static JSClassID fake_dom_class_id = 0;
 
 static int JS_Length(JSContext *ctx, JSValueConst arr) {
     JSValue len_val = JS_GetPropertyStr(ctx, arr, "length");
@@ -16,7 +16,7 @@ static int JS_Length(JSContext *ctx, JSValueConst arr) {
     return len;
 }
 
-static void dom_object_finalizer(JSRuntime *rt, JSValue val) {
+static void fake_dom_object_finalizer(JSRuntime *rt, JSValue val) {
     printf("[DOM] object destroyed\n");
 }
 
@@ -202,17 +202,17 @@ static void define_prop(JSContext *ctx, JSValue proto, const char *name, JSCFunc
     JS_FreeAtom(ctx, atom);
 }
 
-void dom_define_node_proto(JSContext *ctx) {
+void fake_dom_define_node_proto(JSContext *ctx) {
     static JSClassDef dom_class = {
         "DOMNode",
-        .finalizer = dom_object_finalizer
+        .finalizer = fake_dom_object_finalizer
     };
-    if (dom_class_id == 0) {
-        JS_NewClassID(JS_GetRuntime(ctx), &dom_class_id);
-        JS_NewClass(JS_GetRuntime(ctx), dom_class_id, &dom_class);
+    if (fake_dom_class_id == 0) {
+        JS_NewClassID(JS_GetRuntime(ctx), &fake_dom_class_id);
+        JS_NewClass(JS_GetRuntime(ctx), fake_dom_class_id, &dom_class);
     }
     node_proto = JS_NewObject(ctx);
-    JS_SetClassProto(ctx, dom_class_id, node_proto);
+    JS_SetClassProto(ctx, fake_dom_class_id, node_proto);
 
     define_prop(ctx, node_proto, "nodeType", (JSCFunctionMagic *)getter_nodeType, NULL);
     define_prop(ctx, node_proto, "childNodes", (JSCFunctionMagic *)getter_childNodes, NULL);
@@ -230,8 +230,8 @@ void dom_define_node_proto(JSContext *ctx) {
     JS_SetPropertyStr(ctx, node_proto, "getAttribute", JS_NewCFunction(ctx, fn_getAttribute, "getAttribute", 1));
 }
 
-JSValue dom_make_node(JSContext *ctx, const char *name, int type, JSValue ownerDoc) {
-    JSValue obj = JS_NewObjectClass(ctx, dom_class_id);
+JSValue fake_dom_make_node(JSContext *ctx, const char *name, int type, JSValue ownerDoc) {
+    JSValue obj = JS_NewObjectClass(ctx, fake_dom_class_id);
     JS_SetPrototype(ctx, obj, node_proto);
     JS_SetPropertyStr(ctx, obj, "_nodeName", JS_NewString(ctx, name));
     JS_SetPropertyStr(ctx, obj, "_nodeType", JS_NewInt32(ctx, type));
