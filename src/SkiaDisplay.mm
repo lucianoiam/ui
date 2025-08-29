@@ -1,3 +1,4 @@
+
 #import <Cocoa/Cocoa.h>
 #include "SkiaDisplay.h"
 #include <include/core/SkPixmap.h>
@@ -26,13 +27,9 @@
     size_t height = pixmap.height();
     size_t rowBytes = pixmap.rowBytes();
     CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
-         /* Zero-copy path:
-             Skia's current build for this project yields RGBA premultiplied bytes (confirmed by earlier B/R swap artifact).
-             CoreGraphics can consume that directly using kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big
-             (which denotes 32-bit RGBA layout in memory). This avoids per-frame channel swizzling & malloc. */
-         CGBitmapInfo bitmapInfo = kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big; // RGBA premul
-         CGDataProviderRef provider = CGDataProviderCreateWithData(NULL, pixmap.addr(), rowBytes * height, NULL);
-         CGImageRef cgImage = CGImageCreate(width, height, 8, 32, rowBytes, colorSpace, bitmapInfo, provider, NULL, false, kCGRenderingIntentDefault);
+    CGBitmapInfo bitmapInfo = kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big; // RGBA premul
+    CGDataProviderRef provider = CGDataProviderCreateWithData(NULL, pixmap.addr(), rowBytes * height, NULL);
+    CGImageRef cgImage = CGImageCreate(width, height, 8, 32, rowBytes, colorSpace, bitmapInfo, provider, NULL, false, kCGRenderingIntentDefault);
     if (cgImage) {
         CGContextRef ctx = [[NSGraphicsContext currentContext] CGContext];
         CGContextDrawImage(ctx, CGRectMake(0, 0, width, height), cgImage);
@@ -54,18 +51,13 @@ void display_skia_image(sk_sp<SkImage> image, int width, int height) {
     @autoreleasepool {
         NSApplication *app = [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
-
         static AppDelegate *delegate = nil;
         if (!delegate) {
             delegate = [AppDelegate new];
             [app setDelegate:delegate];
         }
-
-        // Menu bar with Application (Cmd+Q) and Window (Cmd+W) -> close -> exit app
         if (![NSApp mainMenu]) {
             NSMenu *menubar = [[NSMenu alloc] initWithTitle:@""];
-
-            // Application menu
             NSMenuItem *appItem = [[NSMenuItem alloc] initWithTitle:@"" action:NULL keyEquivalent:@""];
             [menubar addItem:appItem];
             NSMenu *appMenu = [[NSMenu alloc] initWithTitle:@"Application"];
@@ -75,8 +67,6 @@ void display_skia_image(sk_sp<SkImage> image, int width, int height) {
             [quitItem setKeyEquivalentModifierMask:NSEventModifierFlagCommand];
             [appMenu addItem:quitItem];
             [appItem setSubmenu:appMenu];
-
-            // Window menu with Close (Cmd+W). Closing last window triggers termination via delegate.
             NSMenuItem *windowItem = [[NSMenuItem alloc] initWithTitle:@"" action:NULL keyEquivalent:@""];
             [menubar addItem:windowItem];
             NSMenu *windowMenu = [[NSMenu alloc] initWithTitle:@"Window"];
@@ -84,7 +74,6 @@ void display_skia_image(sk_sp<SkImage> image, int width, int height) {
             [closeItem setKeyEquivalentModifierMask:NSEventModifierFlagCommand];
             [windowMenu addItem:closeItem];
             [windowItem setSubmenu:windowMenu];
-
             [NSApp setMainMenu:menubar];
         }
         NSRect frame = NSMakeRect(0, 0, width, height);

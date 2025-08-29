@@ -1,10 +1,10 @@
+// Skia + QuickJS + HTML/CSS/Yoga Demo
 #include <cstdio>
 #include <cstring>
 #include <unordered_map>
 #include <string>
 #include <functional>
 #include <cctype>
-
 #include "SkiaDisplay.h"
 #include <Cocoa/Cocoa.h>
 #include <lexbor/dom/interfaces/document.h>
@@ -12,9 +12,7 @@
 #include <lexbor/dom/interfaces/node.h>
 #include <lexbor/html/html.h>
 #include <lexbor/html/interfaces/document.h>
-
 #include <yoga/Yoga.h>
-
 #include <include/core/SkSurface.h>
 #include <include/core/SkCanvas.h>
 #include <include/core/SkPaint.h>
@@ -28,36 +26,31 @@ extern "C" {
 #include "quickjs/quickjs.h"
 }
 
-// HTML content as before
 static const char* html_content = R"HTML(
 <div id="container" style="display:flex; flex-direction: column; width: 800px; height: 600px;">
-  <div id="box1" style="background-color:#FF0000; flex:1"></div>
-  <div id="box2" style="background-color:#00FF00; flex:1"></div>
-  <div id="box3" style="background-color:#0000FF; flex:1"></div>
-  <div id="canvasContainer" style="flex:2">
-   <canvas id="mycanvas" width="640" height="480"></canvas>
-  </div>
+   <div id="box1" style="background-color:#FF0000; flex:1"></div>
+   <div id="box2" style="background-color:#00FF00; flex:1"></div>
+   <div id="box3" style="background-color:#0000FF; flex:1"></div>
+   <div id="canvasContainer" style="flex:2">
+    <canvas id="mycanvas" width="640" height="480"></canvas>
+   </div>
 </div>
 )HTML";
 
-// Global pointer to SkCanvas for JS functions to draw on
 static SkCanvas* g_skiaCanvas = nullptr;
 
-// Canvas 2D context state
 struct CanvasContextState {
-   double arcX{0}, arcY{0}, arcR{0};
-   bool hasArc{false};
-   SkColor fillColor{SK_ColorCYAN}; // default
+      double arcX{0}, arcY{0}, arcR{0};
+      bool hasArc{false};
+      SkColor fillColor{SK_ColorCYAN};
 };
 
 static JSClassID g_ctx2d_class_id = 0;
 
 static void ctx2d_finalizer(JSRuntime *rt, JSValue val) {
-   auto *state = static_cast<CanvasContextState*>(JS_GetOpaque(val, g_ctx2d_class_id));
-   delete state;
+      auto *state = static_cast<CanvasContextState*>(JS_GetOpaque(val, g_ctx2d_class_id));
+      delete state;
 }
-
-// Forward declarations of JS native functions
 static JSValue js_arc(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 static JSValue js_fill(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 static JSValue js_getContext(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);

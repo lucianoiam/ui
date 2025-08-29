@@ -1,3 +1,4 @@
+
 // SkiaDisplay.h - C++ friendly API to show a SkImage in a macOS window.
 #pragma once
 
