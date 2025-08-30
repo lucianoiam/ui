@@ -4,6 +4,7 @@
 #include "fake_dom.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 // No-op event methods for fake DOM compatibility with Preact
 static JSValue fn_addEventListener(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
@@ -36,7 +37,6 @@ JSValue js_createTextNode(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     return t;
 }
 
-static JSValue node_proto;
 static JSClassID fake_dom_class_id = 0;
 
 static int JS_Length(JSContext *ctx, JSValueConst arr) {
@@ -242,30 +242,34 @@ void fake_dom_define_node_proto(JSContext *ctx) {
         JS_NewClassID(JS_GetRuntime(ctx), &fake_dom_class_id);
         JS_NewClass(JS_GetRuntime(ctx), fake_dom_class_id, &dom_class);
     }
-    node_proto = JS_NewObject(ctx);
-    JS_SetClassProto(ctx, fake_dom_class_id, node_proto);
+    FakeDomClassInfo *info = malloc(sizeof(FakeDomClassInfo));
+    info->node_proto = JS_NewObject(ctx);
+    JS_SetClassProto(ctx, fake_dom_class_id, info->node_proto);
 
-    define_prop(ctx, node_proto, "nodeType", (JSCFunctionMagic *)getter_nodeType, NULL);
-    define_prop(ctx, node_proto, "childNodes", (JSCFunctionMagic *)getter_childNodes, NULL);
-    define_prop(ctx, node_proto, "firstChild", (JSCFunctionMagic *)getter_firstChild, NULL);
-    define_prop(ctx, node_proto, "nodeValue", (JSCFunctionMagic *)getter_nodeValue, (JSCFunctionMagic *)setter_nodeValue);
-    define_prop(ctx, node_proto, "parentNode", (JSCFunctionMagic *)getter_parentNode, NULL);
-    define_prop(ctx, node_proto, "ownerDocument", (JSCFunctionMagic *)getter_ownerDocument, NULL);
-    define_prop(ctx, node_proto, "attributes", (JSCFunctionMagic *)getter_attributes, NULL);
+    define_prop(ctx, info->node_proto, "nodeType", (JSCFunctionMagic *)getter_nodeType, NULL);
+    define_prop(ctx, info->node_proto, "childNodes", (JSCFunctionMagic *)getter_childNodes, NULL);
+    define_prop(ctx, info->node_proto, "firstChild", (JSCFunctionMagic *)getter_firstChild, NULL);
+    define_prop(ctx, info->node_proto, "nodeValue", (JSCFunctionMagic *)getter_nodeValue, (JSCFunctionMagic *)setter_nodeValue);
+    define_prop(ctx, info->node_proto, "parentNode", (JSCFunctionMagic *)getter_parentNode, NULL);
+    define_prop(ctx, info->node_proto, "ownerDocument", (JSCFunctionMagic *)getter_ownerDocument, NULL);
+    define_prop(ctx, info->node_proto, "attributes", (JSCFunctionMagic *)getter_attributes, NULL);
 
-    JS_SetPropertyStr(ctx, node_proto, "appendChild", JS_NewCFunction(ctx, fn_appendChild, "appendChild", 1));
-    JS_SetPropertyStr(ctx, node_proto, "insertBefore", JS_NewCFunction(ctx, fn_insertBefore, "insertBefore", 2));
-    JS_SetPropertyStr(ctx, node_proto, "removeChild", JS_NewCFunction(ctx, fn_removeChild, "removeChild", 1));
-    JS_SetPropertyStr(ctx, node_proto, "replaceChild", JS_NewCFunction(ctx, fn_replaceChild, "replaceChild", 2));
-    JS_SetPropertyStr(ctx, node_proto, "setAttribute", JS_NewCFunction(ctx, fn_setAttribute, "setAttribute", 2));
-    JS_SetPropertyStr(ctx, node_proto, "getAttribute", JS_NewCFunction(ctx, fn_getAttribute, "getAttribute", 1));
-    JS_SetPropertyStr(ctx, node_proto, "addEventListener", JS_NewCFunction(ctx, fn_addEventListener, "addEventListener", 2));
-    JS_SetPropertyStr(ctx, node_proto, "removeEventListener", JS_NewCFunction(ctx, fn_removeEventListener, "removeEventListener", 2));
+    JS_SetPropertyStr(ctx, info->node_proto, "appendChild", JS_NewCFunction(ctx, fn_appendChild, "appendChild", 1));
+    JS_SetPropertyStr(ctx, info->node_proto, "insertBefore", JS_NewCFunction(ctx, fn_insertBefore, "insertBefore", 2));
+    JS_SetPropertyStr(ctx, info->node_proto, "removeChild", JS_NewCFunction(ctx, fn_removeChild, "removeChild", 1));
+    JS_SetPropertyStr(ctx, info->node_proto, "replaceChild", JS_NewCFunction(ctx, fn_replaceChild, "replaceChild", 2));
+    JS_SetPropertyStr(ctx, info->node_proto, "setAttribute", JS_NewCFunction(ctx, fn_setAttribute, "setAttribute", 2));
+    JS_SetPropertyStr(ctx, info->node_proto, "getAttribute", JS_NewCFunction(ctx, fn_getAttribute, "getAttribute", 1));
+    JS_SetPropertyStr(ctx, info->node_proto, "addEventListener", JS_NewCFunction(ctx, fn_addEventListener, "addEventListener", 2));
+    JS_SetPropertyStr(ctx, info->node_proto, "removeEventListener", JS_NewCFunction(ctx, fn_removeEventListener, "removeEventListener", 2));
+
+    JS_SetContextOpaque(ctx, info);
 }
 
 JSValue fake_dom_make_node(JSContext *ctx, const char *name, int type, JSValue ownerDoc) {
     JSValue obj = JS_NewObjectClass(ctx, fake_dom_class_id);
-    JS_SetPrototype(ctx, obj, node_proto);
+    FakeDomClassInfo *info = (FakeDomClassInfo *)JS_GetContextOpaque(ctx);
+    JS_SetPrototype(ctx, obj, info->node_proto);
     JS_SetPropertyStr(ctx, obj, "_nodeName", JS_NewString(ctx, name));
     JS_SetPropertyStr(ctx, obj, "_nodeType", JS_NewInt32(ctx, type));
     JS_SetPropertyStr(ctx, obj, "_childNodes", JS_NewArray(ctx));

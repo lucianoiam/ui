@@ -5,6 +5,9 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+typedef struct {
+	JSValue node_proto;
+} FakeDomClassInfo;
 void fake_dom_define_node_proto(JSContext *ctx);
 JSValue fake_dom_make_node(JSContext *ctx, const char *name, int type, JSValue ownerDoc);
 // DOM creation functions for JS
