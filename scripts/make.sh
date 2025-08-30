@@ -17,6 +17,12 @@ YOGA_LIB="$BUILD_DIR/yoga/libyogacore.a"
 LEXBOR_LIB="$BUILD_DIR/lexbor/liblexbor_static.a"
 QUICKJS_LIB="$BUILD_DIR/quickjs/libqjs.a"
 
+# If build/ directory does not exist, build the libs
+if [ ! -d "$BUILD_DIR" ]; then
+  echo "[make.sh] build/ directory not found, building libraries..."
+  "$SCRIPT_DIR/build_libs.sh"
+fi
+
 missing=()
 for lib in "$SKIA_LIB" "$YOGA_LIB" "$LEXBOR_LIB" "$QUICKJS_LIB"; do
   [ -f "$lib" ] || missing+=("$lib")
@@ -83,5 +89,3 @@ done
 echo "Linking -> $OUT_BIN"
 "$CXX" $STD "${OBJ_FILES[@]}" "${LIBS[@]}" -o "$OUT_BIN"
 echo "Done: $OUT_BIN"
-echo "Running..."
-"$OUT_BIN"
