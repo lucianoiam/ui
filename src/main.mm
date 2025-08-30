@@ -3,8 +3,8 @@
 #include <string.h>
 #include <sys/time.h>
 #include <stdbool.h>
-#include "fake_dom.h"
-#include "fake_globals.h"
+#include "wapis/dom.h"
+#include "wapis/whatwg.h"
 
 
 // Uncomment to enable each test
@@ -37,12 +37,12 @@ TestResult run_preact_test(const char *test_js, const char *output_html, const c
     JSValue global = JS_UNDEFINED, document = JS_UNDEFINED, body = JS_UNDEFINED;
     const char *assign_hooks = "if (typeof preactHooks !== 'undefined') preact.hooks = preactHooks;";
 
-    define_fake_globals(ctx);
-    fake_dom_define_node_proto(ctx);
+    define_whatwg_globals(ctx);
+    dom_define_node_proto(ctx);
     global = JS_GetGlobalObject(ctx);
     document = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, global, "document", document);
-    body = fake_dom_make_node(ctx, "BODY", 1, document);
+    body = dom_make_node(ctx, "BODY", 1, document);
     JS_SetPropertyStr(ctx, document, "body", body);
     JS_SetPropertyStr(ctx, document, "createElement", JS_NewCFunction(ctx, js_createElement, "createElement", 1));
     JS_SetPropertyStr(ctx, document, "createElementNS", JS_NewCFunction(ctx, js_createElementNS, "createElementNS", 2));
@@ -112,12 +112,7 @@ cleanup:
     // Do NOT JS_FreeValue body, document, or global: QuickJS owns them after set as properties
     for (int i = 0; i < 3; ++i) JS_RunGC(rt);
     // Free per-context prototype
-    FakeDomClassInfo *info = (FakeDomClassInfo *)JS_GetContextOpaque(ctx);
-    if (info) {
-        JS_FreeValue(ctx, info->node_proto);
-        free(info);
-        JS_SetContextOpaque(ctx, NULL);
-    }
+    // No per-context prototype cleanup needed for new dom implementation
     fprintf(stderr, "[DEBUG] Freeing JSContext and JSRuntime\n");
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);

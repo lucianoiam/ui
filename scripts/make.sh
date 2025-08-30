@@ -39,14 +39,16 @@ INCLUDES=(
   -I"$ROOT_DIR/external/quickjs"
   -I"$ROOT_DIR/external/yoga"
   -I"$ROOT_DIR/external/lexbor/source"
+  -I"$SRC_DIR"
+  -I"$SRC_DIR/wapis"
 )
 
 # C++ sources
 SOURCES=(
   "$SRC_DIR/main.mm"
   "$SRC_DIR/SkiaDisplay.mm"
-  "$SRC_DIR/fake_dom.c"
-  "$SRC_DIR/fake_globals.c"
+  "$SRC_DIR/wapis/dom.c"
+  "$SRC_DIR/wapis/whatwg.c"
 )
 
 LIBS=(

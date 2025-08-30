@@ -1,12 +1,15 @@
-
-// fake_dom.c - Modularized fake DOM for QuickJS/Preact emulation
+// dom.c - see dom.h for API
+#include "dom.h"
 #include <quickjs.h>
-#include "fake_dom.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
-// No-op event methods for fake DOM compatibility with Preact
+typedef struct {
+    JSClassID class_id;
+    JSValue node_proto;
+} DomClassInfo;
+
 static JSValue fn_addEventListener(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     return JS_UNDEFINED;
 }
@@ -14,31 +17,27 @@ static JSValue fn_removeEventListener(JSContext *ctx, JSValueConst this_val, int
     return JS_UNDEFINED;
 }
 
-
-
-// DOM creation functions for JS
 JSValue js_createElement(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     const char *tag = JS_ToCString(ctx, argv[0]);
-    JSValue el = fake_dom_make_node(ctx, tag, 1, this_val);
+    JSValue el = dom_make_node(ctx, tag, 1, this_val);
     JS_FreeCString(ctx, tag);
     return el;
 }
 
 JSValue js_createElementNS(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     const char *tag = JS_ToCString(ctx, argv[1]);
-    JSValue el = fake_dom_make_node(ctx, tag, 1, this_val);
+    JSValue el = dom_make_node(ctx, tag, 1, this_val);
     JS_FreeCString(ctx, tag);
     return el;
 }
 
 JSValue js_createTextNode(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     const char *txt = JS_ToCString(ctx, argv[0]);
-    JSValue t = fake_dom_make_node(ctx, "#text", 3, this_val);
+    JSValue t = dom_make_node(ctx, "#text", 3, this_val);
     JS_SetPropertyStr(ctx, t, "_nodeValue", JS_NewString(ctx, txt));
     JS_FreeCString(ctx, txt);
     return t;
 }
-
 
 static int JS_Length(JSContext *ctx, JSValueConst arr) {
     JSValue len_val = JS_GetPropertyStr(ctx, arr, "length");
@@ -48,8 +47,8 @@ static int JS_Length(JSContext *ctx, JSValueConst arr) {
     return len;
 }
 
-static void fake_dom_object_finalizer(JSRuntime *rt, JSValue val) {
-    printf("[DOM] object destroyed\n");
+static void dom_object_finalizer(JSRuntime *rt, JSValue val) {
+    // Optionally add debug print or cleanup
 }
 
 static void remove_from_parent(JSContext *ctx, JSValue node) {
@@ -80,35 +79,28 @@ static void remove_from_parent(JSContext *ctx, JSValue node) {
 static JSValue getter_nodeType(JSContext *ctx, JSValueConst this_val) {
     return JS_DupValue(ctx, JS_GetPropertyStr(ctx, this_val, "_nodeType"));
 }
-
 static JSValue getter_childNodes(JSContext *ctx, JSValueConst this_val) {
     return JS_DupValue(ctx, JS_GetPropertyStr(ctx, this_val, "_childNodes"));
 }
-
 static JSValue getter_firstChild(JSContext *ctx, JSValueConst this_val) {
     JSValue arr = JS_GetPropertyStr(ctx, this_val, "_childNodes");
     JSValue first = JS_GetPropertyUint32(ctx, arr, 0);
     JS_FreeValue(ctx, arr);
     return first;
 }
-
 static JSValue getter_nodeValue(JSContext *ctx, JSValueConst this_val) {
     return JS_DupValue(ctx, JS_GetPropertyStr(ctx, this_val, "_nodeValue"));
 }
-
 static JSValue setter_nodeValue(JSContext *ctx, JSValueConst this_val, JSValueConst value) {
     JS_SetPropertyStr(ctx, (JSValue)this_val, "_nodeValue", JS_DupValue(ctx, value));
     return JS_UNDEFINED;
 }
-
 static JSValue getter_parentNode(JSContext *ctx, JSValueConst this_val) {
     return JS_DupValue(ctx, JS_GetPropertyStr(ctx, this_val, "_parentNode"));
 }
-
 static JSValue getter_ownerDocument(JSContext *ctx, JSValueConst this_val) {
     return JS_DupValue(ctx, JS_GetPropertyStr(ctx, this_val, "_ownerDocument"));
 }
-
 static JSValue getter_attributes(JSContext *ctx, JSValueConst this_val) {
     return JS_DupValue(ctx, JS_GetPropertyStr(ctx, this_val, "_attributes"));
 }
@@ -122,7 +114,6 @@ static JSValue fn_setAttribute(JSContext *ctx, JSValueConst this_val, int argc, 
     JS_FreeValue(ctx, attrs);
     return JS_UNDEFINED;
 }
-
 static JSValue fn_getAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (argc < 1) return JS_ThrowTypeError(ctx, "getAttribute: Expected name");
     const char *name = JS_ToCString(ctx, argv[0]);
@@ -132,7 +123,6 @@ static JSValue fn_getAttribute(JSContext *ctx, JSValueConst this_val, int argc, 
     JS_FreeValue(ctx, attrs);
     return value;
 }
-
 static JSValue fn_appendChild(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (argc < 1 || JS_IsNull(argv[0]) || JS_IsUndefined(argv[0])) {
         return JS_ThrowTypeError(ctx, "appendChild: Invalid node");
@@ -144,7 +134,6 @@ static JSValue fn_appendChild(JSContext *ctx, JSValueConst this_val, int argc, J
     JS_FreeValue(ctx, arr);
     return JS_DupValue(ctx, argv[0]);
 }
-
 static JSValue fn_insertBefore(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (argc < 1 || JS_IsNull(argv[0]) || JS_IsUndefined(argv[0])) {
         return JS_ThrowTypeError(ctx, "insertBefore: Invalid node");
@@ -174,7 +163,6 @@ static JSValue fn_insertBefore(JSContext *ctx, JSValueConst this_val, int argc, 
     JS_FreeValue(ctx, arr);
     return JS_DupValue(ctx, argv[0]);
 }
-
 static JSValue fn_removeChild(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (argc < 1 || JS_IsNull(argv[0]) || JS_IsUndefined(argv[0])) {
         return JS_ThrowTypeError(ctx, "removeChild: Invalid node");
@@ -200,7 +188,6 @@ static JSValue fn_removeChild(JSContext *ctx, JSValueConst this_val, int argc, J
     JS_FreeValue(ctx, arr);
     return JS_ThrowTypeError(ctx, "removeChild: Node not found");
 }
-
 static JSValue fn_replaceChild(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (argc < 2 || JS_IsNull(argv[0]) || JS_IsUndefined(argv[0]) || JS_IsNull(argv[1]) || JS_IsUndefined(argv[1])) {
         return JS_ThrowTypeError(ctx, "replaceChild: Invalid nodes");
@@ -224,7 +211,6 @@ static JSValue fn_replaceChild(JSContext *ctx, JSValueConst this_val, int argc, 
     return JS_ThrowTypeError(ctx, "replaceChild: Node not found");
 }
 
-// Helper for defining properties (C, not C++ lambda)
 static void define_prop(JSContext *ctx, JSValue proto, const char *name, JSCFunctionMagic *getter, JSCFunctionMagic *setter) {
     JSAtom atom = JS_NewAtom(ctx, name);
     JS_DefinePropertyGetSet(ctx, proto, atom,
@@ -234,12 +220,12 @@ static void define_prop(JSContext *ctx, JSValue proto, const char *name, JSCFunc
     JS_FreeAtom(ctx, atom);
 }
 
-void fake_dom_define_node_proto(JSContext *ctx) {
+void dom_define_node_proto(JSContext *ctx) {
     static JSClassDef dom_class = {
         "DOMNode",
-        .finalizer = fake_dom_object_finalizer
+        .finalizer = dom_object_finalizer
     };
-    FakeDomClassInfo *info = malloc(sizeof(FakeDomClassInfo));
+    DomClassInfo *info = malloc(sizeof(DomClassInfo));
     JS_NewClassID(JS_GetRuntime(ctx), &info->class_id);
     JS_NewClass(JS_GetRuntime(ctx), info->class_id, &dom_class);
     info->node_proto = JS_NewObject(ctx);
@@ -263,8 +249,8 @@ void fake_dom_define_node_proto(JSContext *ctx) {
     JS_SetContextOpaque(ctx, info);
 }
 
-JSValue fake_dom_make_node(JSContext *ctx, const char *name, int type, JSValue ownerDoc) {
-    FakeDomClassInfo *info = (FakeDomClassInfo *)JS_GetContextOpaque(ctx);
+JSValue dom_make_node(JSContext *ctx, const char *name, int type, JSValue ownerDoc) {
+    DomClassInfo *info = (DomClassInfo *)JS_GetContextOpaque(ctx);
     JSValue obj = JS_NewObjectClass(ctx, info->class_id);
     if (!info || JS_IsUndefined(info->node_proto)) {
         fprintf(stderr, "[FATAL] node_proto is undefined!\n");
