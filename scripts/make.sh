@@ -46,7 +46,7 @@ INCLUDES=(
 # C++ sources
 SOURCES=(
   "$SRC_DIR/main.mm"
-  "$SRC_DIR/SkiaDisplay.mm"
+  "$SRC_DIR/scratch/SkiaDisplay.mm"
   "$SRC_DIR/wapis/dom.c"
   "$SRC_DIR/wapis/whatwg.c"
 )

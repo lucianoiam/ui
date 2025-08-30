@@ -27,12 +27,12 @@ npx microbundle build --no-minify --no-compress -f umd --cwd hooks
 
 # Copy resulting UMD files to src/
 cd - > /dev/null
-cp external/preact/dist/preact.umd.js src/preact.js
-cp external/preact/hooks/dist/hooks.umd.js src/preact_hooks.js
+cp external/preact/dist/preact.umd.js build/preact.js
+cp external/preact/hooks/dist/hooks.umd.js build/preact_hooks.js
 
 # Clean untracked files from the preact submodule to avoid dirty state
 cd external/preact
 git clean -fdx
 cd - > /dev/null
 
-echo "Preact and hooks UMD builds complete, copied to src/, and submodule cleaned."
+echo "Preact and hooks UMD builds complete, copied to build/, and submodule cleaned."

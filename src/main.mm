@@ -185,8 +185,8 @@ int main(int argc, char **argv) {
         "output/test_app_1.html",
         serialize_dom_js,
         serialize_dom_js_len,
-        "src/preact.js",
-        "src/preact_hooks.js",
+        "build/preact.js",
+        "build/preact_hooks.js",
         "[TEST 1 OUTPUT]",
         "[BENCHMARK] Preact app + DOM brute force test"
     );
@@ -197,8 +197,8 @@ int main(int argc, char **argv) {
         "output/test_app_2.html",
         serialize_dom_js,
         serialize_dom_js_len,
-        "src/preact.js",
-        "src/preact_hooks.js",
+        "build/preact.js",
+        "build/preact_hooks.js",
         "[TEST 2 OUTPUT]",
         "[BENCHMARK] Preact app + DOM complexity test"
     );
