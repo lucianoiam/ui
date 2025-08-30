@@ -6,6 +6,7 @@
 extern "C" {
 #endif
 typedef struct {
+	JSClassID class_id;
 	JSValue node_proto;
 } FakeDomClassInfo;
 void fake_dom_define_node_proto(JSContext *ctx);

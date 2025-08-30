@@ -14,6 +14,8 @@ static JSValue fn_removeEventListener(JSContext *ctx, JSValueConst this_val, int
     return JS_UNDEFINED;
 }
 
+
+
 // DOM creation functions for JS
 JSValue js_createElement(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     const char *tag = JS_ToCString(ctx, argv[0]);
@@ -37,7 +39,6 @@ JSValue js_createTextNode(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     return t;
 }
 
-static JSClassID fake_dom_class_id = 0;
 
 static int JS_Length(JSContext *ctx, JSValueConst arr) {
     JSValue len_val = JS_GetPropertyStr(ctx, arr, "length");
@@ -238,14 +239,10 @@ void fake_dom_define_node_proto(JSContext *ctx) {
         "DOMNode",
         .finalizer = fake_dom_object_finalizer
     };
-    if (fake_dom_class_id == 0) {
-        JS_NewClassID(JS_GetRuntime(ctx), &fake_dom_class_id);
-        JS_NewClass(JS_GetRuntime(ctx), fake_dom_class_id, &dom_class);
-    }
     FakeDomClassInfo *info = malloc(sizeof(FakeDomClassInfo));
+    JS_NewClassID(JS_GetRuntime(ctx), &info->class_id);
+    JS_NewClass(JS_GetRuntime(ctx), info->class_id, &dom_class);
     info->node_proto = JS_NewObject(ctx);
-    JS_SetClassProto(ctx, fake_dom_class_id, info->node_proto);
-
     define_prop(ctx, info->node_proto, "nodeType", (JSCFunctionMagic *)getter_nodeType, NULL);
     define_prop(ctx, info->node_proto, "childNodes", (JSCFunctionMagic *)getter_childNodes, NULL);
     define_prop(ctx, info->node_proto, "firstChild", (JSCFunctionMagic *)getter_firstChild, NULL);
@@ -267,8 +264,12 @@ void fake_dom_define_node_proto(JSContext *ctx) {
 }
 
 JSValue fake_dom_make_node(JSContext *ctx, const char *name, int type, JSValue ownerDoc) {
-    JSValue obj = JS_NewObjectClass(ctx, fake_dom_class_id);
     FakeDomClassInfo *info = (FakeDomClassInfo *)JS_GetContextOpaque(ctx);
+    JSValue obj = JS_NewObjectClass(ctx, info->class_id);
+    if (!info || JS_IsUndefined(info->node_proto)) {
+        fprintf(stderr, "[FATAL] node_proto is undefined!\n");
+        abort();
+    }
     JS_SetPrototype(ctx, obj, info->node_proto);
     JS_SetPropertyStr(ctx, obj, "_nodeName", JS_NewString(ctx, name));
     JS_SetPropertyStr(ctx, obj, "_nodeType", JS_NewInt32(ctx, type));

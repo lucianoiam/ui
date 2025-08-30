@@ -8,8 +8,125 @@
 
 
 // Uncomment to enable each test
+
 #define ENABLE_TEST_1
 #define ENABLE_TEST_2
+
+
+typedef struct {
+    double elapsed;
+    int success;
+} TestResult;
+
+// Forward declarations
+static char *load_file(const char *filename, size_t *out_len);
+static void dump_exception(JSContext *ctx);
+double run_test(JSContext *ctx, const char *filename);
+
+
+TestResult run_preact_test(const char *test_js, const char *output_html, const char *serialize_dom_js, size_t serialize_dom_js_len, const char *preact_js_path, const char *hooks_js_path, const char *test_label, const char *benchmark_label) {
+
+    TestResult result = {0};
+    JSRuntime *rt = JS_NewRuntime();
+    JSContext *ctx = JS_NewContext(rt);
+    int error = 0;
+    size_t preact_js_len = 0, hooks_js_len = 0;
+    char *preact_js = NULL, *hooks_js = NULL;
+    JSValue r = JS_UNDEFINED, serialize_fn = JS_UNDEFINED, html_val = JS_UNDEFINED;
+    const char *html = NULL;
+    JSValue global = JS_UNDEFINED, document = JS_UNDEFINED, body = JS_UNDEFINED;
+    const char *assign_hooks = "if (typeof preactHooks !== 'undefined') preact.hooks = preactHooks;";
+
+    define_fake_globals(ctx);
+    fake_dom_define_node_proto(ctx);
+    global = JS_GetGlobalObject(ctx);
+    document = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, global, "document", document);
+    body = fake_dom_make_node(ctx, "BODY", 1, document);
+    JS_SetPropertyStr(ctx, document, "body", body);
+    JS_SetPropertyStr(ctx, document, "createElement", JS_NewCFunction(ctx, js_createElement, "createElement", 1));
+    JS_SetPropertyStr(ctx, document, "createElementNS", JS_NewCFunction(ctx, js_createElementNS, "createElementNS", 2));
+    JS_SetPropertyStr(ctx, document, "createTextNode", JS_NewCFunction(ctx, js_createTextNode, "createTextNode", 1));
+    JS_SetPropertyStr(ctx, global, "window", JS_DupValue(ctx, global));
+    JS_SetPropertyStr(ctx, global, "self", JS_DupValue(ctx, global));
+    JS_SetPropertyStr(ctx, global, "globalThis", JS_DupValue(ctx, global));
+
+    preact_js = load_file(preact_js_path, &preact_js_len);
+    if (!preact_js) {
+        fprintf(stderr, "Failed to load %s\n", preact_js_path);
+        error = 1;
+        goto cleanup;
+    }
+    r = JS_Eval(ctx, preact_js, preact_js_len, preact_js_path, JS_EVAL_TYPE_GLOBAL);
+    free(preact_js);
+    if (JS_IsException(r)) dump_exception(ctx);
+    JS_FreeValue(ctx, r);
+
+    hooks_js = load_file(hooks_js_path, &hooks_js_len);
+    if (!hooks_js) {
+        fprintf(stderr, "Failed to load %s\n", hooks_js_path);
+        error = 1;
+        goto cleanup;
+    }
+    r = JS_Eval(ctx, hooks_js, hooks_js_len, hooks_js_path, JS_EVAL_TYPE_GLOBAL);
+    free(hooks_js);
+    if (JS_IsException(r)) dump_exception(ctx);
+    JS_FreeValue(ctx, r);
+
+    r = JS_Eval(ctx, assign_hooks, strlen(assign_hooks), "<assign_hooks>", JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(r)) dump_exception(ctx);
+    JS_FreeValue(ctx, r);
+
+    // Run test
+    result.elapsed = run_test(ctx, test_js);
+    r = JS_Eval(ctx, serialize_dom_js, serialize_dom_js_len, "src/serialize_dom.js", JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(r)) dump_exception(ctx);
+    JS_FreeValue(ctx, r);
+
+    serialize_fn = JS_GetPropertyStr(ctx, global, "serialize_dom");
+    if (JS_IsFunction(ctx, serialize_fn)) {
+        html_val = JS_Call(ctx, serialize_fn, global, 0, NULL);
+        if (!JS_IsException(html_val)) {
+            html = JS_ToCString(ctx, html_val);
+            if (html) {
+                printf("%s\n%s\n", test_label, html);
+                FILE *f = fopen(output_html, "w");
+                if (f) { fputs(html, f); fclose(f); result.success = 1; }
+                else { fprintf(stderr, "Failed to open %s for writing\n", output_html); }
+                JS_FreeCString(ctx, html);
+            }
+        } else {
+            dump_exception(ctx);
+        }
+        JS_FreeValue(ctx, html_val);
+    } else {
+        fprintf(stderr, "serialize_dom is not a function!\n");
+    }
+    JS_FreeValue(ctx, serialize_fn);
+
+cleanup:
+    // Remove document/body properties to break cycles, but do not free JSValues owned by QuickJS
+    fprintf(stderr, "[DEBUG] Cleanup: start\n");
+    JS_SetPropertyStr(ctx, global, "document", JS_UNDEFINED);
+    JS_SetPropertyStr(ctx, document, "body", JS_UNDEFINED);
+    // Do NOT JS_FreeValue body, document, or global: QuickJS owns them after set as properties
+    for (int i = 0; i < 3; ++i) JS_RunGC(rt);
+    // Free per-context prototype
+    FakeDomClassInfo *info = (FakeDomClassInfo *)JS_GetContextOpaque(ctx);
+    if (info) {
+        JS_FreeValue(ctx, info->node_proto);
+        free(info);
+        JS_SetContextOpaque(ctx, NULL);
+    }
+    fprintf(stderr, "[DEBUG] Freeing JSContext and JSRuntime\n");
+    JS_FreeContext(ctx);
+    JS_FreeRuntime(rt);
+    fflush(stdout);
+    fprintf(stderr, "[DEBUG] Cleanup: end\n");
+    if (!error && result.elapsed >= 0)
+        printf("%s: %.1f ms\n", benchmark_label, result.elapsed);
+    return result;
+}
 
 static void dump_exception(JSContext *ctx) {
     JSValue ex = JS_GetException(ctx);
@@ -61,189 +178,36 @@ double run_test(JSContext *ctx, const char *filename) {
 int main(int argc, char **argv) {
     // Enable core dumps for segfault debugging
     #include <sys/resource.h>
-    struct rlimit rl;
-    if (getrlimit(RLIMIT_CORE, &rl) == 0) {
-        rl.rlim_cur = rl.rlim_max;
-        setrlimit(RLIMIT_CORE, &rl);
-    }
-    fprintf(stderr, "[INFO] Core dumps enabled. If a segfault occurs, run: lldb %s core or gdb %s core\n", argv[0], argv[0]);
-    struct timeval start, end;
-    double elapsed;
-    JSRuntime *rt = JS_NewRuntime();
-    double elapsed1 = -1.0, elapsed2 = -1.0;
     size_t serialize_dom_js_len = 0;
     char *serialize_dom_js = load_file("src/serialize_dom.js", &serialize_dom_js_len);
     if (!serialize_dom_js) {
         fprintf(stderr, "Failed to load src/serialize_dom.js\n");
         return 1;
     }
-
-#ifdef ENABLE_TEST_1
-    {
-        JSRuntime *rt = JS_NewRuntime();
-        JSContext *ctx = JS_NewContext(rt);
-        define_fake_globals(ctx);
-        fake_dom_define_node_proto(ctx);
-        JSValue global = JS_GetGlobalObject(ctx);
-        JSValue document = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, global, "document", document);
-        JSValue body = fake_dom_make_node(ctx, "BODY", 1, document);
-        JS_SetPropertyStr(ctx, document, "body", body);
-        JS_SetPropertyStr(ctx, document, "createElement", JS_NewCFunction(ctx, js_createElement, "createElement", 1));
-        JS_SetPropertyStr(ctx, document, "createElementNS", JS_NewCFunction(ctx, js_createElementNS, "createElementNS", 2));
-        JS_SetPropertyStr(ctx, document, "createTextNode", JS_NewCFunction(ctx, js_createTextNode, "createTextNode", 1));
-        JS_SetPropertyStr(ctx, global, "window", JS_DupValue(ctx, global));
-        JS_SetPropertyStr(ctx, global, "self", JS_DupValue(ctx, global));
-        JS_SetPropertyStr(ctx, global, "globalThis", JS_DupValue(ctx, global));
-        size_t preact_js_len = 0;
-        char *preact_js = load_file("src/preact.js", &preact_js_len);
-        if (!preact_js) {
-            fprintf(stderr, "Failed to load src/preact.js\n");
-            return 1;
-        }
-        JSValue r = JS_Eval(ctx, preact_js, preact_js_len, "src/preact.js", JS_EVAL_TYPE_GLOBAL);
-        free(preact_js);
-        if (JS_IsException(r)) dump_exception(ctx);
-        JS_FreeValue(ctx, r);
-        size_t hooks_js_len = 0;
-        char *hooks_js = load_file("src/preact_hooks.js", &hooks_js_len);
-        if (!hooks_js) {
-            fprintf(stderr, "Failed to load src/preact_hooks.js\n");
-            return 1;
-        }
-        r = JS_Eval(ctx, hooks_js, hooks_js_len, "src/preact_hooks.js", JS_EVAL_TYPE_GLOBAL);
-        free(hooks_js);
-        if (JS_IsException(r)) dump_exception(ctx);
-        JS_FreeValue(ctx, r);
-        const char *assign_hooks = "if (typeof preactHooks !== 'undefined') preact.hooks = preactHooks;";
-        r = JS_Eval(ctx, assign_hooks, strlen(assign_hooks), "<assign_hooks>", JS_EVAL_TYPE_GLOBAL);
-        if (JS_IsException(r)) dump_exception(ctx);
-        JS_FreeValue(ctx, r);
-        // Run test 1
-        elapsed1 = run_test(ctx, "src/test_app_1.js");
-        r = JS_Eval(ctx, serialize_dom_js, serialize_dom_js_len, "src/serialize_dom.js", JS_EVAL_TYPE_GLOBAL);
-        if (JS_IsException(r)) dump_exception(ctx);
-        JS_FreeValue(ctx, r);
-        JSValue serialize_fn1 = JS_GetPropertyStr(ctx, global, "serialize_dom");
-        if (JS_IsFunction(ctx, serialize_fn1)) {
-            JSValue html_val1 = JS_Call(ctx, serialize_fn1, global, 0, NULL);
-            if (!JS_IsException(html_val1)) {
-                const char *html1 = JS_ToCString(ctx, html_val1);
-                if (html1) {
-                    printf("[TEST 1 OUTPUT]\n%s\n", html1);
-                    FILE *f1 = fopen("output/test_app_1.html", "w");
-                    if (f1) { fputs(html1, f1); fclose(f1); }
-                    else { fprintf(stderr, "Failed to open output/test_app_1.html for writing\n"); }
-                    JS_FreeCString(ctx, html1);
-                }
-            } else {
-                dump_exception(ctx);
-            }
-            JS_FreeValue(ctx, html_val1);
-        } else {
-            fprintf(stderr, "serialize_dom is not a function!\n");
-        }
-        JS_FreeValue(ctx, serialize_fn1);
-    // Do not free body, document, or global; QuickJS owns them after setting as properties
-        for (int i = 0; i < 3; ++i) JS_RunGC(rt);
-        // Free FakeDomClassInfo and node_proto before freeing context
-        FakeDomClassInfo *info = (FakeDomClassInfo *)JS_GetContextOpaque(ctx);
-        if (info) {
-            free(info);
-            JS_SetContextOpaque(ctx, NULL);
-        }
-        JS_FreeContext(ctx);
-        JS_FreeRuntime(rt);
-        fflush(stdout);
-        if (elapsed1 >= 0)
-            printf("[BENCHMARK] Preact app + DOM brute force test: %.1f ms\n", elapsed1);
-    }
-#endif
-#ifdef ENABLE_TEST_2
-    {
-        JSRuntime *rt = JS_NewRuntime();
-        JSContext *ctx = JS_NewContext(rt);
-        define_fake_globals(ctx);
-        fake_dom_define_node_proto(ctx);
-        JSValue global = JS_GetGlobalObject(ctx);
-        JSValue document = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, global, "document", document);
-        JSValue body = fake_dom_make_node(ctx, "BODY", 1, document);
-        JS_SetPropertyStr(ctx, document, "body", body);
-        JS_SetPropertyStr(ctx, document, "createElement", JS_NewCFunction(ctx, js_createElement, "createElement", 1));
-        JS_SetPropertyStr(ctx, document, "createElementNS", JS_NewCFunction(ctx, js_createElementNS, "createElementNS", 2));
-        JS_SetPropertyStr(ctx, document, "createTextNode", JS_NewCFunction(ctx, js_createTextNode, "createTextNode", 1));
-        JS_SetPropertyStr(ctx, global, "window", JS_DupValue(ctx, global));
-        JS_SetPropertyStr(ctx, global, "self", JS_DupValue(ctx, global));
-        JS_SetPropertyStr(ctx, global, "globalThis", JS_DupValue(ctx, global));
-        size_t preact_js_len = 0;
-        char *preact_js = load_file("src/preact.js", &preact_js_len);
-        if (!preact_js) {
-            fprintf(stderr, "Failed to load src/preact.js\n");
-            return 1;
-        }
-        JSValue r = JS_Eval(ctx, preact_js, preact_js_len, "src/preact.js", JS_EVAL_TYPE_GLOBAL);
-        free(preact_js);
-        if (JS_IsException(r)) dump_exception(ctx);
-        JS_FreeValue(ctx, r);
-        size_t hooks_js_len = 0;
-        char *hooks_js = load_file("src/preact_hooks.js", &hooks_js_len);
-        if (!hooks_js) {
-            fprintf(stderr, "Failed to load src/preact_hooks.js\n");
-            return 1;
-        }
-        r = JS_Eval(ctx, hooks_js, hooks_js_len, "src/preact_hooks.js", JS_EVAL_TYPE_GLOBAL);
-        free(hooks_js);
-        if (JS_IsException(r)) dump_exception(ctx);
-        JS_FreeValue(ctx, r);
-        const char *assign_hooks = "if (typeof preactHooks !== 'undefined') preact.hooks = preactHooks;";
-        r = JS_Eval(ctx, assign_hooks, strlen(assign_hooks), "<assign_hooks>", JS_EVAL_TYPE_GLOBAL);
-        if (JS_IsException(r)) dump_exception(ctx);
-        JS_FreeValue(ctx, r);
-        // Run test 2
-        elapsed2 = run_test(ctx, "src/test_app_2.js");
-        r = JS_Eval(ctx, serialize_dom_js, serialize_dom_js_len, "src/serialize_dom.js", JS_EVAL_TYPE_GLOBAL);
-        if (JS_IsException(r)) dump_exception(ctx);
-        JS_FreeValue(ctx, r);
-        JSValue serialize_fn2 = JS_GetPropertyStr(ctx, global, "serialize_dom");
-        if (JS_IsFunction(ctx, serialize_fn2)) {
-            JSValue html_val2 = JS_Call(ctx, serialize_fn2, global, 0, NULL);
-            if (!JS_IsException(html_val2)) {
-                const char *html2 = JS_ToCString(ctx, html_val2);
-                if (html2) {
-                    printf("[TEST 2 OUTPUT]\n%s\n", html2);
-                    FILE *f2 = fopen("output/test_app_2.html", "w");
-                    if (f2) { fputs(html2, f2); fclose(f2); }
-                    else { fprintf(stderr, "Failed to open output/test_app_2.html for writing\n"); }
-                    JS_FreeCString(ctx, html2);
-                }
-            } else {
-                dump_exception(ctx);
-            }
-            JS_FreeValue(ctx, html_val2);
-        } else {
-            fprintf(stderr, "serialize_dom is not a function!\n");
-        }
-        JS_FreeValue(ctx, serialize_fn2);
-        JS_SetPropertyStr(ctx, global, "document", JS_UNDEFINED);
-        JS_SetPropertyStr(ctx, document, "body", JS_UNDEFINED);
-        JS_FreeValue(ctx, body);
-        JS_FreeValue(ctx, document);
-        JS_FreeValue(ctx, global);
-        for (int i = 0; i < 3; ++i) JS_RunGC(rt);
-        // Free FakeDomClassInfo and node_proto before freeing context
-        FakeDomClassInfo *info = (FakeDomClassInfo *)JS_GetContextOpaque(ctx);
-        if (info) {
-            free(info);
-            JS_SetContextOpaque(ctx, NULL);
-        }
-        JS_FreeContext(ctx);
-        JS_FreeRuntime(rt);
-        fflush(stdout);
-        if (elapsed2 >= 0)
-            printf("[BENCHMARK] Preact app + DOM complexity test: %.1f ms\n", elapsed2);
-    }
-#endif
+    #ifdef ENABLE_TEST_1
+    run_preact_test(
+        "src/test_app_1.js",
+        "output/test_app_1.html",
+        serialize_dom_js,
+        serialize_dom_js_len,
+        "src/preact.js",
+        "src/preact_hooks.js",
+        "[TEST 1 OUTPUT]",
+        "[BENCHMARK] Preact app + DOM brute force test"
+    );
+    #endif
+    #ifdef ENABLE_TEST_2
+    run_preact_test(
+        "src/test_app_2.js",
+        "output/test_app_2.html",
+        serialize_dom_js,
+        serialize_dom_js_len,
+        "src/preact.js",
+        "src/preact_hooks.js",
+        "[TEST 2 OUTPUT]",
+        "[BENCHMARK] Preact app + DOM complexity test"
+    );
+    #endif
     free(serialize_dom_js);
     return 0;
 }
