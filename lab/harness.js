@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 
 // Load Preact
-const preactPath = path.resolve(__dirname, 'preact.js');
+const preactPath = path.resolve(__dirname, 'preact.esm.js');
 console.log('[Lab] Loading Preact from:', preactPath);
 const preact = require(preactPath);
 const { h, render } = preact;
