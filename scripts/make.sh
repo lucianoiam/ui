@@ -55,6 +55,9 @@ SOURCES=(
   "$SRC_DIR/scratch/SkiaDisplay.mm"
   "$SRC_DIR/wapis/dom.c"
   "$SRC_DIR/wapis/whatwg.c"
+  "$SRC_DIR/gfx/main_render.cpp"
+  "$SRC_DIR/gfx/display.mm"
+  "$SRC_DIR/gfx/render_dom_qjs.cpp"
 )
 
 LIBS=(

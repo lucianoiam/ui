@@ -5,7 +5,13 @@
 #include <stdbool.h>
 #include "wapis/dom.h"
 #include "wapis/whatwg.h"
-
+#include "gfx/render.h"
+#include "gfx/display.h"
+// Enable core dumps for segfault debugging
+#include <sys/resource.h>
+// Ensure output directory exists
+#include <sys/stat.h>
+#include <unistd.h>
 
 // Uncomment to enable each test
 
@@ -22,6 +28,7 @@ typedef struct {
 static char *load_file(const char *filename, size_t *out_len);
 static void dump_exception(JSContext *ctx);
 double run_test(JSContext *ctx, const char *filename);
+void render_and_display_dom(JSContext *ctx, JSValue document);
 
 
 TestResult run_preact_test(const char *test_js, const char *output_html, const char *serialize_dom_js, size_t serialize_dom_js_len, const char *preact_js_path, const char *hooks_js_path, const char *test_label, const char *benchmark_label) {
@@ -104,6 +111,9 @@ TestResult run_preact_test(const char *test_js, const char *output_html, const c
     }
     JS_FreeValue(ctx, serialize_fn);
 
+    // After test and serialization, render and display DOM
+    render_and_display_dom(ctx, document);
+
 cleanup:
     // Remove document/body properties to break cycles, but do not free JSValues owned by QuickJS
     fprintf(stderr, "[DEBUG] Cleanup: start\n");
@@ -171,8 +181,10 @@ double run_test(JSContext *ctx, const char *filename) {
 }
 
 int main(int argc, char **argv) {
-    // Enable core dumps for segfault debugging
-    #include <sys/resource.h>
+    struct stat st = {0};
+    if (stat("output", &st) == -1) {
+        mkdir("output", 0755);
+    }
     size_t serialize_dom_js_len = 0;
     char *serialize_dom_js = load_file("src/tests/serialize_dom.js", &serialize_dom_js_len);
     if (!serialize_dom_js) {
@@ -180,6 +192,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     #ifdef ENABLE_TEST_1
+    fprintf(stderr, "[main] Running TEST 1...\n");
     run_preact_test(
         "src/tests/bruteforce.js",
         "output/bruteforce.html",
@@ -190,8 +203,10 @@ int main(int argc, char **argv) {
         "[TEST 1 OUTPUT]",
         "[BENCHMARK] Preact app + DOM brute force test"
     );
+    fprintf(stderr, "[main] Finished TEST 1.\n");
     #endif
     #ifdef ENABLE_TEST_2
+    fprintf(stderr, "[main] Running TEST 2...\n");
     run_preact_test(
         "src/tests/complex.js",
         "output/complex.html",
@@ -202,6 +217,7 @@ int main(int argc, char **argv) {
         "[TEST 2 OUTPUT]",
         "[BENCHMARK] Preact app + DOM complexity test"
     );
+    fprintf(stderr, "[main] Finished TEST 2.\n");
     #endif
     free(serialize_dom_js);
     return 0;
