@@ -79,7 +79,7 @@ TestResult run_preact_test(const char *test_js, const char *output_html, const c
 
     // Run test
     result.elapsed = run_test(ctx, test_js);
-    r = JS_Eval(ctx, serialize_dom_js, serialize_dom_js_len, "src/serialize_dom.js", JS_EVAL_TYPE_GLOBAL);
+    r = JS_Eval(ctx, serialize_dom_js, serialize_dom_js_len, "src/tests/serialize_dom.js", JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(r)) dump_exception(ctx);
     JS_FreeValue(ctx, r);
 
@@ -174,15 +174,15 @@ int main(int argc, char **argv) {
     // Enable core dumps for segfault debugging
     #include <sys/resource.h>
     size_t serialize_dom_js_len = 0;
-    char *serialize_dom_js = load_file("src/serialize_dom.js", &serialize_dom_js_len);
+    char *serialize_dom_js = load_file("src/tests/serialize_dom.js", &serialize_dom_js_len);
     if (!serialize_dom_js) {
-        fprintf(stderr, "Failed to load src/serialize_dom.js\n");
+        fprintf(stderr, "Failed to load src/tests/serialize_dom.js\n");
         return 1;
     }
     #ifdef ENABLE_TEST_1
     run_preact_test(
-        "src/test_app_1.js",
-        "output/test_app_1.html",
+        "src/tests/bruteforce.js",
+        "output/bruteforce.html",
         serialize_dom_js,
         serialize_dom_js_len,
         "build/preact.js",
@@ -193,8 +193,8 @@ int main(int argc, char **argv) {
     #endif
     #ifdef ENABLE_TEST_2
     run_preact_test(
-        "src/test_app_2.js",
-        "output/test_app_2.html",
+        "src/tests/complex.js",
+        "output/complex.html",
         serialize_dom_js,
         serialize_dom_js_len,
         "build/preact.js",

@@ -1,4 +1,3 @@
-// test_app_2.js
 // Complexity-based React/Preact stress test for QuickJS DOM emulation
 // Focus: deep component trees, context, hooks, keys, and prop changes
 

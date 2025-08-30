@@ -1,4 +1,3 @@
-// test_app_1.js
 // Original brute force stress test for QuickJS + React/Preact DOM
 // (moved from react_app.js)
 
