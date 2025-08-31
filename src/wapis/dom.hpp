@@ -2,8 +2,9 @@
 #pragma once
 #include <string>
 #include <vector>
-#include <memory>
+#include <memory> // for std::enable_shared_from_this
 #include <unordered_map>
+#include <atomic>
 
 namespace dom {
 
@@ -21,6 +22,7 @@ public:
     std::vector<std::shared_ptr<Node>> childNodes;
     std::weak_ptr<Node> parentNode;
     std::weak_ptr<Node> ownerDocument;
+    uint64_t debugId = 0; // monotonic id for debugging
 
     // --- Core DOM methods ---
     virtual std::shared_ptr<Node> appendChild(std::shared_ptr<Node> child);

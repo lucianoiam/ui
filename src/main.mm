@@ -3,8 +3,23 @@
 #include <string.h>
 #include <sys/time.h>
 #include <stdbool.h>
-#include "wapis/dom_qjs.h"
+#include <sys/stat.h>
+#include <sys/types.h>
+#include "wapis/dom_adapter.h"
 #include "wapis/whatwg.h"
+#include <stdlib.h>
+#include <unistd.h>
+
+static void diagnostic_atexit() {
+    fprintf(stderr, "[DIAG] atexit handler running (normal process teardown)\n");
+    fflush(stderr);
+}
+
+struct DiagnosticDtor {
+    ~DiagnosticDtor() {
+        fprintf(stderr, "[DIAG] static destructor executed\n");
+    }
+} g_diagnostic_dtor;
 
 
 // Uncomment to enable each test
@@ -40,13 +55,13 @@ TestResult run_preact_test(const char *test_js, const char *output_html, const c
     define_whatwg_globals(ctx);
     dom_define_node_proto(ctx);
     global = JS_GetGlobalObject(ctx);
-    document = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, global, "document", document);
-    body = dom_make_node(ctx, "BODY", 1, document);
-    JS_SetPropertyStr(ctx, document, "body", body);
+    document = dom_create_document(ctx);
+    JS_SetPropertyStr(ctx, global, "document", JS_DupValue(ctx, document));
+    // Expose factory methods bound to document
     JS_SetPropertyStr(ctx, document, "createElement", JS_NewCFunction(ctx, js_createElement, "createElement", 1));
     JS_SetPropertyStr(ctx, document, "createElementNS", JS_NewCFunction(ctx, js_createElementNS, "createElementNS", 2));
     JS_SetPropertyStr(ctx, document, "createTextNode", JS_NewCFunction(ctx, js_createTextNode, "createTextNode", 1));
+    body = JS_GetPropertyStr(ctx, document, "body");
     JS_SetPropertyStr(ctx, global, "window", JS_DupValue(ctx, global));
     JS_SetPropertyStr(ctx, global, "self", JS_DupValue(ctx, global));
     JS_SetPropertyStr(ctx, global, "globalThis", JS_DupValue(ctx, global));
@@ -80,6 +95,9 @@ TestResult run_preact_test(const char *test_js, const char *output_html, const c
     // Run test (benchmark only the app/test execution)
     result.elapsed = run_test(ctx, test_js);
 
+    // Ensure output directory exists
+    mkdir("output", 0777);
+
     // DOM serialization (not included in benchmark)
     r = JS_Eval(ctx, serialize_dom_js, serialize_dom_js_len, "src/tests/serialize_dom.js", JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(r)) dump_exception(ctx);
@@ -107,17 +125,35 @@ TestResult run_preact_test(const char *test_js, const char *output_html, const c
     JS_FreeValue(ctx, serialize_fn);
 
 cleanup:
-    // Remove document/body properties to break cycles, but do not free JSValues owned by QuickJS
     fprintf(stderr, "[DEBUG] Cleanup: start\n");
+    // Break JS reachability first so that freeing our duplicate wrapper refs
+    // actually lets finalizers run during dom_runtime_cleanup.
     JS_SetPropertyStr(ctx, global, "document", JS_UNDEFINED);
-    JS_SetPropertyStr(ctx, document, "body", JS_UNDEFINED);
-    // Do NOT JS_FreeValue body, document, or global: QuickJS owns them after set as properties
+    if (!JS_IsUndefined(document)) JS_SetPropertyStr(ctx, document, "body", JS_UNDEFINED);
+    // Drop local references (they are dup'd when stored on objects)
+    if (!JS_IsUndefined(body)) JS_FreeValue(ctx, body);
+    if (!JS_IsUndefined(document)) JS_FreeValue(ctx, document);
+    if (!JS_IsUndefined(global)) JS_FreeValue(ctx, global);
+    // Now run DOM runtime cleanup which frees duplicate refs kept for identity
+    const char* disableCleanup = getenv("DOM_DISABLE_CLEANUP");
+    if (!disableCleanup || !*disableCleanup) {
+        // Run an extra GC before wrapper free to reduce objects finalizing after context destruction
+        JS_RunGC(rt);
+        dom_runtime_cleanup(ctx);
+        JS_RunGC(rt);
+    } else {
+        fprintf(stderr, "[MAIN] DOM cleanup skipped due to DOM_DISABLE_CLEANUP env var\n");
+    }
     for (int i = 0; i < 3; ++i) JS_RunGC(rt);
-    // Free per-context prototype
-    // No per-context prototype cleanup needed for new dom implementation
     fprintf(stderr, "[DEBUG] Freeing JSContext and JSRuntime\n");
     JS_FreeContext(ctx);
+    // Fence: allocate & free small block to catch use-after-free earlier
+    { volatile char *p = (char*)malloc(16); if (p) { p[0]=0; free((void*)p);} }
+    // Clear adapter registration prior to freeing runtime (defensive)
+    dom_adapter_unregister_runtime(rt);
     JS_FreeRuntime(rt);
+    // Marker file for post-run analysis (best-effort)
+    FILE* mf = fopen("output/last_run_ok.marker", "w"); if (mf) { fputs("ok", mf); fclose(mf);} 
     fflush(stdout);
     fprintf(stderr, "[DEBUG] Cleanup: end\n");
     if (!error && result.elapsed >= 0)
@@ -173,6 +209,7 @@ double run_test(JSContext *ctx, const char *filename) {
 }
 
 int main(int argc, char **argv) {
+    atexit(diagnostic_atexit);
     // Enable core dumps for segfault debugging
     #include <sys/resource.h>
     size_t serialize_dom_js_len = 0;
@@ -181,30 +218,88 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Failed to load src/tests/serialize_dom.js\n");
         return 1;
     }
-    #ifdef ENABLE_TEST_1
-    run_preact_test(
-        "src/tests/bruteforce.js",
-        "output/bruteforce.html",
-        serialize_dom_js,
-        serialize_dom_js_len,
-        "build/preact.js",
-        "build/preact_hooks.js",
-        "[TEST 1 OUTPUT]",
-        "[BENCHMARK] Preact app + DOM brute force test"
-    );
-    #endif
-    #ifdef ENABLE_TEST_2
-    run_preact_test(
-        "src/tests/complex.js",
-        "output/complex.html",
-        serialize_dom_js,
-        serialize_dom_js_len,
-        "build/preact.js",
-        "build/preact_hooks.js",
-        "[TEST 2 OUTPUT]",
-        "[BENCHMARK] Preact app + DOM complexity test"
-    );
-    #endif
+    const char* run_only = getenv("RUN_ONLY");
+    int which = run_only ? atoi(run_only) : 0; // 0 = both
+    const char* stress = getenv("DOM_STRESS_LOOPS");
+    int stress_loops = stress ? atoi(stress) : 0;
+    if (stress_loops > 0) {
+        fprintf(stderr, "[DIAG] Stress mode: %d loops (RUN_ONLY=%d)\n", stress_loops, which);
+    }
+    auto run_test_suite = [&](int testId){
+        if (testId == 1) {
+            #ifdef ENABLE_TEST_1
+            run_preact_test(
+                "src/tests/bruteforce.js",
+                "output/bruteforce.html",
+                serialize_dom_js,
+                serialize_dom_js_len,
+                "build/preact.js",
+                "build/preact_hooks.js",
+                "[TEST 1 OUTPUT]",
+                "[BENCHMARK] Preact app + DOM brute force test"
+            );
+            #endif
+        } else if (testId == 2) {
+            #ifdef ENABLE_TEST_2
+            run_preact_test(
+                "src/tests/complex.js",
+                "output/complex.html",
+                serialize_dom_js,
+                serialize_dom_js_len,
+                "build/preact.js",
+                "build/preact_hooks.js",
+                "[TEST 2 OUTPUT]",
+                "[BENCHMARK] Preact app + DOM complexity test"
+            );
+            #endif
+        }
+    };
+
+    if (stress_loops > 0) {
+        int target = which == 2 ? 2 : 1; // default to test1 if 0 or 1
+        for (int i=0;i<stress_loops;i++) {
+            fprintf(stderr, "[DIAG] Stress iteration %d/%d start\n", i+1, stress_loops);
+            run_test_suite(target);
+            fprintf(stderr, "[DIAG] Stress iteration %d/%d end\n", i+1, stress_loops);
+        }
+    } else if (which == 0 || which == 1) {
+        #ifdef ENABLE_TEST_1
+        run_preact_test(
+            "src/tests/bruteforce.js",
+            "output/bruteforce.html",
+            serialize_dom_js,
+            serialize_dom_js_len,
+            "build/preact.js",
+            "build/preact_hooks.js",
+            "[TEST 1 OUTPUT]",
+            "[BENCHMARK] Preact app + DOM brute force test"
+        );
+        #endif
+    }
+    if (stress_loops == 0 && (which == 0 || which == 2)) {
+        #ifdef ENABLE_TEST_2
+        run_preact_test(
+            "src/tests/complex.js",
+            "output/complex.html",
+            serialize_dom_js,
+            serialize_dom_js_len,
+            "build/preact.js",
+            "build/preact_hooks.js",
+            "[TEST 2 OUTPUT]",
+            "[BENCHMARK] Preact app + DOM complexity test"
+        );
+        #endif
+    }
     free(serialize_dom_js);
+    const char* exit_mode = getenv("DOM_EXIT_MODE");
+    if (exit_mode) {
+        if (!strcmp(exit_mode, "fast")) {
+            fprintf(stderr, "[DIAG] Fast _exit(0) requested\n");
+            _exit(0);
+        } else if (!strcmp(exit_mode, "abort")) {
+            fprintf(stderr, "[DIAG] abort() requested\n");
+            abort();
+        }
+    }
     return 0;
 }

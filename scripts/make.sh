@@ -40,6 +40,39 @@ mkdir -p "$BUILD_DIR"
 CXX=${CXX:-c++}
 STD="-std=c++17"
 
+# Initialize flags to avoid unbound variable when DEBUG not set (set -u)
+CXXFLAGS="${CXXFLAGS:-}"
+LDFLAGS="${LDFLAGS:-}"
+CFLAGS="${CFLAGS:-}"
+
+if [ "${DEBUG:-0}" = "1" ]; then
+  echo "[make.sh] DEBUG build with AddressSanitizer"
+  CXXFLAGS+=" -O0 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined"
+  CFLAGS+=" -O0 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined"
+  LDFLAGS+=" -fsanitize=address,undefined"
+else
+  # Default release-style optimization if not explicitly provided
+  if [[ "${CXXFLAGS}" != *"-O"* ]]; then
+    if [ "${RELEASE_DBG:-0}" = "1" ]; then
+      CXXFLAGS+=" -O2 -g -DNDEBUG"
+    else
+      CXXFLAGS+=" -O3 -flto -DNDEBUG"
+    fi
+  fi
+  if [[ "${CFLAGS}" != *"-O"* ]]; then
+    if [ "${RELEASE_DBG:-0}" = "1" ]; then
+      CFLAGS+=" -O2 -g -DNDEBUG"
+    else
+      CFLAGS+=" -O3 -flto -DNDEBUG"
+    fi
+  fi
+fi
+
+# Feature flags from env
+if [ "${DOM_DISABLE_STYLE:-0}" = "1" ]; then
+  CXXFLAGS+=" -DDOM_DISABLE_STYLE"
+fi
+
 INCLUDES=(
   -I"$ROOT_DIR/external/skia"
   -I"$ROOT_DIR/external/quickjs"
@@ -53,7 +86,8 @@ INCLUDES=(
 SOURCES=(
   "$SRC_DIR/main.mm"
   "$SRC_DIR/scratch/SkiaDisplay.mm"
-  "$SRC_DIR/wapis/dom_qjs.c"
+  "$SRC_DIR/wapis/dom_adapter.cpp"
+  "$SRC_DIR/wapis/dom.cpp"
   "$SRC_DIR/wapis/whatwg.c"
 )
 
@@ -79,13 +113,13 @@ for src in "${SOURCES[@]}"; do
   ext="${src##*.}"
   obj="$BUILD_DIR/$(basename "$src" | sed 's/\.[^.]*$/.o/')"
   if [[ "$ext" == "c" ]]; then
-    clang -c "$src" "${INCLUDES[@]}" -o "$obj"
+    clang -c $CFLAGS "$src" "${INCLUDES[@]}" -o "$obj"
   else
-    "$CXX" -c $STD "$src" "${INCLUDES[@]}" -o "$obj"
+  "$CXX" -c $STD $CXXFLAGS "$src" "${INCLUDES[@]}" -o "$obj"
   fi
   OBJ_FILES+=("$obj")
 done
 
 echo "Linking -> $OUT_BIN"
-"$CXX" $STD "${OBJ_FILES[@]}" "${LIBS[@]}" -o "$OUT_BIN"
+"$CXX" $STD $CXXFLAGS "${OBJ_FILES[@]}" "${LIBS[@]}" $LDFLAGS -o "$OUT_BIN"
 echo "Done: $OUT_BIN"

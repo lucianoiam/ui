@@ -1,6 +1,9 @@
 // dom.cpp - C++ DOM implementation (W3C/WHATWG-inspired)
 #include "dom.hpp"
 #include <algorithm>
+#include <atomic>
+
+static std::atomic<uint64_t> g_node_id_counter{1};
 
 namespace dom {
 
@@ -138,18 +141,22 @@ std::shared_ptr<Element> Document::createElement(const std::string& tag) {
     el->nodeName = tag;
     el->tagName = tag;
     el->ownerDocument = shared_from_this();
+    el->debugId = g_node_id_counter.fetch_add(1, std::memory_order_relaxed);
     return el;
 }
 
 std::shared_ptr<Text> Document::createTextNode(const std::string& value) {
     auto t = std::make_shared<Text>(value);
     t->ownerDocument = shared_from_this();
+    t->debugId = g_node_id_counter.fetch_add(1, std::memory_order_relaxed);
     return t;
 }
 
 // --- Factory ---
 std::shared_ptr<Document> createDocument() {
-    return std::make_shared<Document>();
+    auto d = std::make_shared<Document>();
+    d->debugId = g_node_id_counter.fetch_add(1, std::memory_order_relaxed);
+    return d;
 }
 
 } // namespace dom
