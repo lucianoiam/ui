@@ -73,6 +73,11 @@ if [ "${DOM_DISABLE_STYLE:-0}" = "1" ]; then
   CXXFLAGS+=" -DDOM_DISABLE_STYLE"
 fi
 
+# Strict mode removes convenience non-standard helpers (className property & style.cssText object)
+if [ "${DOM_STRICT:-0}" = "1" ]; then
+  CXXFLAGS+=" -DDOM_STRICT"
+fi
+
 INCLUDES=(
   -I"$ROOT_DIR/external/skia"
   -I"$ROOT_DIR/external/quickjs"

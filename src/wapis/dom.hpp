@@ -67,10 +67,11 @@ public:
     std::string getAttribute(const std::string& name) const;
     void removeAttribute(const std::string& name);
 
+#ifndef DOM_STRICT
     // Convenience DOM-style accessors (NON-STANDARD shorthands for get/setAttribute("class"))
-    // Consider removing if strict surface needed.
     std::string className() const { return getAttribute("class"); } // NON-STANDARD
     void setClassName(const std::string& v) { setAttribute("class", v); } // NON-STANDARD
+#endif
     // innerHTML / outerHTML (basic, minimal) -- NON-STANDARD SIMPLIFIED IMPLEMENTATION
     std::string innerHTML() const;              // Serialize children (very minimal)
     void setInnerHTML(const std::string& html); // Replace children from simple HTML/text (stub)

@@ -37,7 +37,29 @@ static std::string pretty_format_body_html(const char* body_outer_html) {
     }
     lxb_html_document_destroy(lxb_doc);
     if (pretty.empty()) return body_outer_html; // fallback
-    return pretty;
+    // Lexbor currently quotes text node data; strip leading/trailing quotes on lines consisting solely of quoted text.
+    std::string cleaned;
+    cleaned.reserve(pretty.size());
+    size_t start = 0; while (start < pretty.size()) {
+        size_t end = pretty.find('\n', start); if (end == std::string::npos) end = pretty.size();
+        std::string_view line(pretty.c_str() + start, end - start);
+        auto ltrim = [](std::string_view v){ size_t i=0; while(i<v.size() && (v[i]==' '||v[i]=='\t')) ++i; return v.substr(i); };
+        auto rtrim = [](std::string_view v){ size_t j=v.size(); while(j>0 && (v[j-1]==' '||v[j-1]=='\t')) --j; return v.substr(0,j); };
+        std::string_view core = rtrim(ltrim(line));
+        if (core.size() >= 2 && core.front()=='"' && core.back()=='"') {
+            // emit unquoted
+            std::string_view inner = core.substr(1, core.size()-2);
+            // Reconstruct preserving original indentation
+            size_t indent_len = core.data() - line.data(); // distance from line begin to core
+            cleaned.append(line.substr(0, indent_len));
+            cleaned.append(inner);
+        } else {
+            cleaned.append(line);
+        }
+        if (end < pretty.size()) cleaned.push_back('\n');
+        start = (end == pretty.size()) ? end : end + 1;
+    }
+    return cleaned.empty() ? pretty : cleaned;
 }
 
 static void diagnostic_atexit() {

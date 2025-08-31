@@ -169,8 +169,10 @@ static JSValue js_get_lastChild(JSContext* ctx, JSValueConst this_val, int, JSVa
 static JSValue js_get_parentNode(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) { auto n=get_cpp_node(ctx,this_val); if(!n) return JS_NULL; return wrap_node_js(ctx, n->parentNode.lock()); }
 static JSValue js_get_nextSibling(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) { auto n = get_cpp_node(ctx,this_val); if(!n) return JS_NULL; return wrap_node_js(ctx, n->nextSibling()); }
 static JSValue js_get_previousSibling(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) { auto n = get_cpp_node(ctx,this_val); if(!n) return JS_NULL; return wrap_node_js(ctx, n->previousSibling()); }
+#ifndef DOM_STRICT
 static JSValue js_get_className(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) { auto node = get_cpp_node(ctx, this_val); if (!node || node->nodeType != dom::NodeType::ELEMENT) return JS_NewString(ctx, ""); auto el = std::static_pointer_cast<Element>(node); return JS_NewString(ctx, el->className().c_str()); }
 static JSValue js_set_className(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { if (argc < 1) return JS_UNDEFINED; size_t len; const char* str = JS_ToCStringLen(ctx, &len, argv[0]); if (str) { auto node = get_cpp_node(ctx, this_val); if (node && node->nodeType == dom::NodeType::ELEMENT) { std::static_pointer_cast<Element>(node)->setClassName(str); } JS_FreeCString(ctx, str); } return JS_UNDEFINED; }
+#endif
 static JSValue js_get_textContent(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) { auto n = get_cpp_node(ctx, this_val); if (!n) return JS_UNDEFINED; auto s = n->textContent(); return JS_NewString(ctx, s.c_str()); }
 static JSValue js_set_textContent(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { if (argc < 1) return JS_UNDEFINED; size_t len; const char* str = JS_ToCStringLen(ctx, &len, argv[0]); auto n = get_cpp_node(ctx, this_val); if (n && str) n->setTextContent(str); if (str) JS_FreeCString(ctx, str); return JS_UNDEFINED; }
 static JSValue js_get_innerHTML(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) { auto n=get_cpp_node(ctx,this_val); if(!n || n->nodeType!=dom::NodeType::ELEMENT) return JS_UNDEFINED; auto s=std::static_pointer_cast<Element>(n)->innerHTML(); return JS_NewString(ctx, s.c_str()); }
@@ -200,7 +202,9 @@ static const PropDesc kPropGetSet[] = {
     {"previousSibling", js_get_previousSibling, nullptr},
     {"ownerDocument", js_get_ownerDocument, nullptr},
     {"_nodeName", js_get__nodeName, nullptr},
+#ifndef DOM_STRICT
     {"className", js_get_className, js_set_className},
+#endif
     {"textContent", js_get_textContent, js_set_textContent},
     {"innerHTML", js_get_innerHTML, js_set_innerHTML},
     {"outerHTML", js_get_outerHTML, nullptr},
