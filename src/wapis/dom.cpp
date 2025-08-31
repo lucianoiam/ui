@@ -161,6 +161,10 @@ std::shared_ptr<Node> Node::previousSibling() const {
 // --- Element ---
 void Element::setAttribute(const std::string& name, const std::string& value) {
     attributes[name] = value;
+    if (name == "style") {
+        // Keep styleCssText mirror in sync
+        const_cast<Element*>(this)->styleCssText = value;
+    }
 }
 
 std::string Element::getAttribute(const std::string& name) const {

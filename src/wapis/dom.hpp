@@ -74,7 +74,11 @@ public:
     std::string className() const { return getAttribute("class"); }
     void setClassName(const std::string& v) { setAttribute("class", v); }
     const std::string& getStyleCssText() const { return styleCssText; }
-    void setStyleCssText(const std::string& v) { styleCssText = v; }
+    // Setting cssText also updates the "style" attribute for serialization
+    void setStyleCssText(const std::string& v) {
+        styleCssText = v;
+        attributes["style"] = v;
+    }
     std::string serializeOpenTag() const; // helper for HTML
 
     // --- Query methods ---

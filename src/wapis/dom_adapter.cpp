@@ -80,21 +80,48 @@ JSValue wrap_node_js(JSContext* ctx, std::shared_ptr<Node> node) {
     if (!node) return JS_NULL;
     if (!g_ctx_for_cleanup) g_ctx_for_cleanup = ctx;
     void* key = node.get();
-    if (auto it = g_node_wrappers.find(key); it != g_node_wrappers.end())
-        return JS_DupValue(ctx, it->second);
+    {
+        auto it = g_node_wrappers.find(key);
+        if (it != g_node_wrappers.end()) {
+            return JS_DupValue(ctx, it->second);
+        }
+    }
     JSValue obj = JS_NewObjectClass(ctx, dom_node_class_id);
     JS_SetOpaque(obj, key);
     g_node_registry[key] = node;
     g_node_wrappers[key] = JS_DupValue(ctx, obj);
     // Hidden debug id property
     JS_DefinePropertyValueStr(ctx, obj, "__id", JS_NewInt64(ctx, (int64_t)node->debugId), JS_PROP_WRITABLE);
-#ifndef DOM_DISABLE_STYLE
     if (node->nodeType == dom::NodeType::ELEMENT) {
         JSValue style = JS_NewObject(ctx);
-        JS_DefinePropertyValueStr(ctx, style, "cssText", JS_NewString(ctx, ""), JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+        // Back-reference to element wrapper for dynamic getter/setter
+        JS_DefinePropertyValueStr(ctx, style, "__node", JS_DupValue(ctx, obj), JS_PROP_CONFIGURABLE);
+        JSAtom cssAt = JS_NewAtom(ctx, "cssText");
+        JS_DefinePropertyGetSet(ctx, style, cssAt,
+            JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int, JSValueConst*){
+                JSValue elv = JS_GetPropertyStr(c, this_val, "__node");
+                if (JS_IsUndefined(elv)) { JS_FreeValue(c, elv); return JS_NewString(c, ""); }
+                auto n = get_cpp_node(c, elv);
+                JS_FreeValue(c, elv);
+                if (!n || n->nodeType != dom::NodeType::ELEMENT) return JS_NewString(c, "");
+                return JS_NewString(c, std::static_pointer_cast<Element>(n)->getStyleCssText().c_str());
+            }, "cssText", 0),
+            JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv){
+                if (argc < 1) return JS_UNDEFINED;
+                size_t len; const char* str = JS_ToCStringLen(c, &len, argv[0]);
+                JSValue elv = JS_GetPropertyStr(c, this_val, "__node");
+                auto n = get_cpp_node(c, elv);
+                JS_FreeValue(c, elv);
+                if (n && n->nodeType == dom::NodeType::ELEMENT && str) {
+                    std::static_pointer_cast<Element>(n)->setStyleCssText(str);
+                }
+                if (str) JS_FreeCString(c, str);
+                return JS_UNDEFINED;
+            }, "cssText", 1),
+            JS_PROP_ENUMERABLE);
+        JS_FreeAtom(ctx, cssAt);
         JS_SetPropertyStr(ctx, obj, "style", style);
     }
-#endif
     ++g_wrap_count;
     if (g_dom_debug && (g_wrap_count < 50 || (g_wrap_count % 500)==0)) {
         fprintf(stderr, "[DOM] wrap ptr=%p id=%llu wrap_count=%zu wrappers=%zu nodes=%zu\n", key, (unsigned long long)node->debugId, g_wrap_count, g_node_wrappers.size(), g_node_registry.size());
@@ -159,6 +186,38 @@ static JSValue js_insertBefore(JSContext* ctx, JSValueConst this_val, int argc, 
 static JSValue js_removeChild(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { if (argc < 1) return JS_UNDEFINED; auto n = get_cpp_node(ctx, this_val); auto c = get_cpp_node(ctx, argv[0]); if (!n || !c) return JS_UNDEFINED; n->removeChild(c); return JS_DupValue(ctx, argv[0]); }
 static JSValue js_replaceChild(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { if (argc < 2) return JS_UNDEFINED; auto n = get_cpp_node(ctx, this_val); auto nc = get_cpp_node(ctx, argv[0]); auto oc = get_cpp_node(ctx, argv[1]); if (!n || !nc || !oc) return JS_UNDEFINED; n->replaceChild(nc, oc); return JS_DupValue(ctx, argv[1]); }
 
+// Descriptor tables (properties & methods) for prototype definition
+struct PropDesc { const char* name; JSCFunction* getter; JSCFunction* setter; };
+static const PropDesc kPropGetSet[] = {
+    {"nodeType", js_get_nodeType, nullptr},
+    {"nodeName", js_get_nodeName, nullptr},
+    {"nodeValue", js_get_nodeValue, nullptr},
+    {"childNodes", js_get_childNodes, nullptr},
+    {"firstChild", js_get_firstChild, nullptr},
+    {"lastChild", js_get_lastChild, nullptr},
+    {"parentNode", js_get_parentNode, nullptr},
+    {"nextSibling", js_get_nextSibling, nullptr},
+    {"previousSibling", js_get_previousSibling, nullptr},
+    {"ownerDocument", js_get_ownerDocument, nullptr},
+    {"_nodeName", js_get__nodeName, nullptr},
+    {"className", js_get_className, js_set_className},
+    {"textContent", js_get_textContent, js_set_textContent},
+    {"innerHTML", js_get_innerHTML, js_set_innerHTML},
+    {"outerHTML", js_get_outerHTML, nullptr},
+};
+struct MethodDesc { const char* name; JSCFunction* fn; int length; };
+static const MethodDesc kMethods[] = {
+    {"appendChild", js_appendChild, 1},
+    {"insertBefore", js_insertBefore, 2},
+    {"removeChild", js_removeChild, 1},
+    {"replaceChild", js_replaceChild, 2},
+    {"setAttribute", js_setAttribute, 2},
+    {"getAttribute", js_getAttribute, 1},
+    {"removeAttribute", js_removeAttribute, 1},
+    {"addEventListener", js_addEventListener, 2},
+    {"removeEventListener", js_removeEventListener, 2},
+};
+
 } // namespace
 
 void dom_define_node_proto(JSContext* ctx) {
@@ -171,31 +230,16 @@ void dom_define_node_proto(JSContext* ctx) {
         g_class_runtime = rt;
     }
     JSValue proto = JS_NewObject(ctx);
-    auto addGetter=[&](const char* name, JSCFunction* fn){ JSAtom at=JS_NewAtom(ctx,name); JS_DefinePropertyGetSet(ctx, proto, at, JS_NewCFunction(ctx, fn, name, 0), JS_UNDEFINED, JS_PROP_ENUMERABLE); JS_FreeAtom(ctx, at); };
-    addGetter("nodeType", js_get_nodeType);
-    addGetter("nodeName", js_get_nodeName);
-    addGetter("nodeValue", js_get_nodeValue);
-    addGetter("childNodes", js_get_childNodes);
-    addGetter("firstChild", js_get_firstChild);
-    addGetter("lastChild", js_get_lastChild);
-    addGetter("parentNode", js_get_parentNode);
-    addGetter("nextSibling", js_get_nextSibling);
-    addGetter("previousSibling", js_get_previousSibling);
-    addGetter("ownerDocument", js_get_ownerDocument);
-    addGetter("_nodeName", js_get__nodeName);
-    JS_DefinePropertyGetSet(ctx, proto, JS_NewAtom(ctx, "className"), JS_NewCFunction(ctx, js_get_className, "get className", 0), JS_NewCFunction(ctx, js_set_className, "set className", 1), JS_PROP_ENUMERABLE);
-    JS_DefinePropertyGetSet(ctx, proto, JS_NewAtom(ctx, "textContent"), JS_NewCFunction(ctx, js_get_textContent, "get textContent", 0), JS_NewCFunction(ctx, js_set_textContent, "set textContent", 1), JS_PROP_ENUMERABLE);
-    JS_DefinePropertyGetSet(ctx, proto, JS_NewAtom(ctx, "innerHTML"), JS_NewCFunction(ctx, js_get_innerHTML, "get innerHTML", 0), JS_NewCFunction(ctx, js_set_innerHTML, "set innerHTML", 1), JS_PROP_ENUMERABLE);
-    JS_DefinePropertyGetSet(ctx, proto, JS_NewAtom(ctx, "outerHTML"), JS_NewCFunction(ctx, js_get_outerHTML, "get outerHTML", 0), JS_UNDEFINED, JS_PROP_ENUMERABLE);
-    JS_DefinePropertyValueStr(ctx, proto, "appendChild", JS_NewCFunction(ctx, js_appendChild, "appendChild", 1), JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
-    JS_DefinePropertyValueStr(ctx, proto, "insertBefore", JS_NewCFunction(ctx, js_insertBefore, "insertBefore", 2), JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
-    JS_DefinePropertyValueStr(ctx, proto, "removeChild", JS_NewCFunction(ctx, js_removeChild, "removeChild", 1), JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
-    JS_DefinePropertyValueStr(ctx, proto, "replaceChild", JS_NewCFunction(ctx, js_replaceChild, "replaceChild", 2), JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
-    JS_DefinePropertyValueStr(ctx, proto, "setAttribute", JS_NewCFunction(ctx, js_setAttribute, "setAttribute", 2), JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
-    JS_DefinePropertyValueStr(ctx, proto, "getAttribute", JS_NewCFunction(ctx, js_getAttribute, "getAttribute", 1), JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
-    JS_DefinePropertyValueStr(ctx, proto, "removeAttribute", JS_NewCFunction(ctx, js_removeAttribute, "removeAttribute", 1), JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
-    JS_DefinePropertyValueStr(ctx, proto, "addEventListener", JS_NewCFunction(ctx, js_addEventListener, "addEventListener", 2), JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
-    JS_DefinePropertyValueStr(ctx, proto, "removeEventListener", JS_NewCFunction(ctx, js_removeEventListener, "removeEventListener", 2), JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+    for (const auto &pd : kPropGetSet) {
+        JSAtom at = JS_NewAtom(ctx, pd.name);
+        JSValue getv = pd.getter ? JS_NewCFunction(ctx, pd.getter, pd.name, 0) : JS_UNDEFINED;
+        JSValue setv = pd.setter ? JS_NewCFunction(ctx, pd.setter, pd.name, 1) : JS_UNDEFINED;
+        JS_DefinePropertyGetSet(ctx, proto, at, getv, setv, JS_PROP_ENUMERABLE);
+        JS_FreeAtom(ctx, at);
+    }
+    for (const auto &md : kMethods) {
+        JS_DefinePropertyValueStr(ctx, proto, md.name, JS_NewCFunction(ctx, md.fn, md.name, md.length), JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+    }
     JS_SetClassProto(ctx, dom_node_class_id, proto);
 }
 
