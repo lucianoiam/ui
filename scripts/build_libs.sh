@@ -81,13 +81,42 @@ build_preact() {
   echo "Preact and hooks UMD builds complete, copied to build/, and submodule cleaned."
 }
 
-build_all() { build_skia; build_yoga; build_lexbor; build_quickjs; build_preact; echo "[all] outputs -> $OUT_ROOT"; }
+build_htm() {
+  HTM_DIR="$ROOT_DIR/external/htm"
+  HTM_OUT_JS="$OUT_ROOT/htm.js"
+  if [ -f "$HTM_OUT_JS" ]; then
+    echo "[htm] Skipping build: $HTM_OUT_JS already exists."
+    return 0
+  fi
+  if [ ! -d "$HTM_DIR" ]; then
+    echo "Error: $HTM_DIR does not exist. Please initialize the submodule first."
+    exit 1
+  fi
+  cd "$HTM_DIR"
+  if [ ! -d "node_modules" ]; then
+    npm install
+  fi
+  # Produce ONLY an unminified UMD build (no module, no minification/compression)
+  npx microbundle src/index.mjs -f umd --no-sourcemap --no-minify --no-compress --target web
+  cd - > /dev/null
+  if [ -f "$HTM_DIR/dist/htm.umd.js" ]; then
+    rm -f "$OUT_ROOT/htm.umd.js" 2>/dev/null || true
+    cp "$HTM_DIR/dist/htm.umd.js" "$HTM_OUT_JS"
+    (cd "$HTM_DIR" && git clean -fdx)
+    echo "[htm] Single UMD build (unminified) copied to build/htm.js and submodule cleaned."
+  else
+    echo "[htm] ERROR: dist/htm.umd.js not produced." >&2
+    exit 1
+  fi
+}
+
+build_all() { build_skia; build_yoga; build_lexbor; build_quickjs; build_preact; build_htm; echo "[all] outputs -> $OUT_ROOT"; }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   if [ $# -eq 0 ]; then build_all; else
     for t in "$@"; do
       case $t in
-        skia) build_skia;; yoga) build_yoga;; lexbor) build_lexbor;; quickjs) build_quickjs;; preact) build_preact;; all) build_all;;
+  skia) build_skia;; yoga) build_yoga;; lexbor) build_lexbor;; quickjs) build_quickjs;; preact) build_preact;; htm) build_htm;; all) build_all;;
         *) echo "Unknown target $t"; exit 1;;
       esac
     done

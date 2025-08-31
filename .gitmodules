@@ -13,3 +13,6 @@
 [submodule "external/preact"]
 	path = external/preact
 	url = https://github.com/preactjs/preact
+[submodule "external/htm"]
+	path = external/htm
+	url = https://github.com/developit/htm
