@@ -97,8 +97,8 @@ TestResult run_preact_test(const char *test_js, const char *output_html, const c
     JSRuntime *rt = JS_NewRuntime();
     JSContext *ctx = JS_NewContext(rt);
     int error = 0;
-    size_t preact_js_len = 0, hooks_js_len = 0;
-    char *preact_js = NULL, *hooks_js = NULL;
+    size_t preact_js_len = 0, hooks_js_len = 0, htm_js_len = 0;
+    char *preact_js = NULL, *hooks_js = NULL, *htm_js = NULL;
     JSValue r = JS_UNDEFINED, html_val = JS_UNDEFINED;
     const char *html = NULL;
     JSValue global = JS_UNDEFINED, document = JS_UNDEFINED, body = JS_UNDEFINED;
@@ -141,6 +141,21 @@ TestResult run_preact_test(const char *test_js, const char *output_html, const c
     r = JS_Eval(ctx, assign_hooks, strlen(assign_hooks), "<assign_hooks>", JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(r)) dump_exception(ctx);
     JS_FreeValue(ctx, r);
+
+    // Load htm UMD (provides global 'htm') and bind template helper as global 'htm'
+    htm_js = load_file("build/htm.js", &htm_js_len);
+    if (htm_js) {
+        r = JS_Eval(ctx, htm_js, htm_js_len, "build/htm.js", JS_EVAL_TYPE_GLOBAL);
+        free(htm_js); htm_js = NULL;
+        if (JS_IsException(r)) dump_exception(ctx);
+        JS_FreeValue(ctx, r);
+    const char *bind_html = "if (typeof htm !== 'undefined' && typeof preact !== 'undefined') { globalThis.htm = htm.bind(preact.h); }";
+    r = JS_Eval(ctx, bind_html, strlen(bind_html), "<bind_htm>", JS_EVAL_TYPE_GLOBAL);
+        if (JS_IsException(r)) dump_exception(ctx);
+        JS_FreeValue(ctx, r);
+    } else {
+        fprintf(stderr, "[WARN] build/htm.js not found; html templates unavailable\n");
+    }
 
     // Run test (benchmark only the app/test execution)
     result.elapsed = run_test(ctx, test_js);

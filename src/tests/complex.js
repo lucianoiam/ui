@@ -1,7 +1,7 @@
 // Complexity-based React/Preact stress test for QuickJS DOM emulation
 // Focus: deep component trees, context, hooks, keys, and prop changes
 
-const { h, render, createContext } = preact;
+const { render, createContext } = preact;
 const { useState, useEffect, useContext } = preactHooks || {};
 
 const ThemeContext = createContext('light');
@@ -9,18 +9,18 @@ const ThemeContext = createContext('light');
 function DeepTree({ level, max, onLeaf }) {
     if (level >= max) {
         useEffect(() => { onLeaf && onLeaf(); }, []);
-        return h('span', null, `Leaf at level ${level}`);
+        return htm`<span>Leaf at level ${level}</span>`;
     }
-    return h('div', { class: 'deep-node', key: level }, [
-        h('span', null, `Level ${level}`),
-        h(ThemeDisplay, {}),
-        h(DeepTree, { level: level + 1, max, onLeaf })
-    ]);
+    return htm`<div class="deep-node" key=${level}>
+        <span>Level ${level}</span>
+        <${ThemeDisplay} />
+        <${DeepTree} level=${level + 1} max=${max} onLeaf=${onLeaf} />
+    </div>`;
 }
 
 function ThemeDisplay() {
     const theme = useContext(ThemeContext);
-    return h('span', { style: `color: ${theme === 'dark' ? 'white' : 'black'}; background: ${theme === 'dark' ? 'black' : 'white'};` }, `Theme: ${theme}`);
+    return htm`<span style="color: ${theme === 'dark' ? 'white' : 'black'}; background: ${theme === 'dark' ? 'black' : 'white'};">Theme: ${theme}</span>`;
 }
 
 function DynamicList({ n }) {
@@ -31,22 +31,22 @@ function DynamicList({ n }) {
         }, 10);
         return () => clearInterval(id);
     }, []);
-    return h('ul', null, items.map(i => h('li', { key: i }, `Item ${i}`)));
+    return htm`<ul>${items.map(i => htm`<li key=${i}>Item ${i}</li>`)}</ul>`;
 }
 
 function App() {
     const [theme, setTheme] = useState('light');
     const [leafCount, setLeafCount] = useState(0);
-    return h(ThemeContext.Provider, { value: theme },
-        h('div', { class: 'container' }, [
-            h('h1', null, 'React/Preact Complexity Stress Test'),
-            h('button', { onClick: () => setTheme(t => t === 'light' ? 'dark' : 'light') }, 'Toggle Theme'),
-            h('p', null, 'Testing deep context, hooks, dynamic lists, and prop changes.'),
-            h(DynamicList, { n: 100 }),
-            h(DeepTree, { level: 0, max: 20, onLeaf: () => setLeafCount(c => c + 1) }),
-            h('div', null, `Leaf nodes rendered: ${leafCount}`)
-        ])
-    );
+    return htm`<${ThemeContext.Provider} value=${theme}>
+        <div class="container">
+            <h1>React/Preact Complexity Stress Test</h1>
+            <button onClick=${() => setTheme(t => t === 'light' ? 'dark' : 'light')}>Toggle Theme</button>
+            <p>Testing deep context, hooks, dynamic lists, and prop changes.</p>
+            <${DynamicList} n=${100} />
+            <${DeepTree} level=${0} max=${20} onLeaf=${() => setLeafCount(c => c + 1)} />
+            <div>Leaf nodes rendered: ${leafCount}</div>
+        </div>
+    </${ThemeContext.Provider}>`;
 }
 
-render(h(App), document.body);
+render(htm`<${App} />`, document.body);
