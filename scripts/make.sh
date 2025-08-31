@@ -53,7 +53,7 @@ INCLUDES=(
 SOURCES=(
   "$SRC_DIR/main.mm"
   "$SRC_DIR/scratch/SkiaDisplay.mm"
-  "$SRC_DIR/wapis/dom.c"
+  "$SRC_DIR/wapis/dom_qjs.c"
   "$SRC_DIR/wapis/whatwg.c"
 )
 

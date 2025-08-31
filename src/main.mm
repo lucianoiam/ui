@@ -3,7 +3,7 @@
 #include <string.h>
 #include <sys/time.h>
 #include <stdbool.h>
-#include "wapis/dom.h"
+#include "wapis/dom_qjs.h"
 #include "wapis/whatwg.h"
 
 

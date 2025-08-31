@@ -1,5 +1,5 @@
-#ifndef DOM_H
-#define DOM_H
+ #ifndef DOM_QJS_H
+ #define DOM_QJS_H
 #include <quickjs.h>
 #ifdef __cplusplus
 extern "C" {
@@ -14,4 +14,4 @@ int dom_define_core(JSContext *ctx);
 #ifdef __cplusplus
 }
 #endif
-#endif // DOM_H
+#endif // DOM_QJS_H

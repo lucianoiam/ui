@@ -1,5 +1,5 @@
-// dom.c - see dom.h for API
-#include "dom.h"
+// dom_qjs.c - see dom_qjs.h for API
+#include "dom_qjs.h"
 #include <quickjs.h>
 #include <stdio.h>
 #include <string.h>
