@@ -77,8 +77,10 @@ TestResult run_preact_test(const char *test_js, const char *output_html, const c
     if (JS_IsException(r)) dump_exception(ctx);
     JS_FreeValue(ctx, r);
 
-    // Run test
+    // Run test (benchmark only the app/test execution)
     result.elapsed = run_test(ctx, test_js);
+
+    // DOM serialization (not included in benchmark)
     r = JS_Eval(ctx, serialize_dom_js, serialize_dom_js_len, "src/tests/serialize_dom.js", JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(r)) dump_exception(ctx);
     JS_FreeValue(ctx, r);
