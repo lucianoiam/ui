@@ -56,6 +56,12 @@ build_quickjs() {
 
 build_preact() {
   PREACT_DIR="$ROOT_DIR/external/preact"
+  PREACT_OUT_JS="$OUT_ROOT/preact.js"
+  PREACT_HOOKS_OUT_JS="$OUT_ROOT/preact_hooks.js"
+  if [ -f "$PREACT_OUT_JS" ] && [ -f "$PREACT_HOOKS_OUT_JS" ]; then
+    echo "[preact] Skipping build: $PREACT_OUT_JS and $PREACT_HOOKS_OUT_JS already exist."
+    return 0
+  fi
   if [ ! -d "$PREACT_DIR" ]; then
     echo "Error: $PREACT_DIR does not exist. Please initialize the submodule first."
     exit 1
@@ -67,8 +73,8 @@ build_preact() {
   npx microbundle build --no-minify --no-compress -f umd --cwd .
   npx microbundle build --no-minify --no-compress -f umd --cwd hooks
   cd - > /dev/null
-  cp "$PREACT_DIR/dist/preact.umd.js" "$OUT_ROOT/preact.js"
-  cp "$PREACT_DIR/hooks/dist/hooks.umd.js" "$OUT_ROOT/preact_hooks.js"
+  cp "$PREACT_DIR/dist/preact.umd.js" "$PREACT_OUT_JS"
+  cp "$PREACT_DIR/hooks/dist/hooks.umd.js" "$PREACT_HOOKS_OUT_JS"
   cd "$PREACT_DIR"
   git clean -fdx
   cd - > /dev/null
