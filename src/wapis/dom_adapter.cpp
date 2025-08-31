@@ -102,8 +102,7 @@ JSValue wrap_node_js(JSContext* ctx, std::shared_ptr<Node> node) {
     return obj;
 }
 
-// JS createElement
-extern "C" JSValue js_createElement(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+static JSValue js_createElement(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     if (argc < 1) return JS_UNDEFINED;
     auto doc = std::dynamic_pointer_cast<Document>(get_cpp_node(ctx, this_val));
     if (!doc) return JS_UNDEFINED;
@@ -112,8 +111,7 @@ extern "C" JSValue js_createElement(JSContext* ctx, JSValueConst this_val, int a
     JS_FreeCString(ctx, tag);
     return wrap_node_js(ctx, el);
 }
-// JS createElementNS (namespace ignored)
-extern "C" JSValue js_createElementNS(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+static JSValue js_createElementNS(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     if (argc < 2) return JS_UNDEFINED;
     auto doc = std::dynamic_pointer_cast<Document>(get_cpp_node(ctx, this_val));
     if (!doc) return JS_UNDEFINED;
@@ -122,8 +120,7 @@ extern "C" JSValue js_createElementNS(JSContext* ctx, JSValueConst this_val, int
     JS_FreeCString(ctx, tag);
     return wrap_node_js(ctx, el);
 }
-// JS createTextNode
-extern "C" JSValue js_createTextNode(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+static JSValue js_createTextNode(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     if (argc < 1) return JS_UNDEFINED;
     auto doc = std::dynamic_pointer_cast<Document>(get_cpp_node(ctx, this_val));
     if (!doc) return JS_UNDEFINED;
@@ -162,8 +159,6 @@ static JSValue js_removeChild(JSContext* ctx, JSValueConst this_val, int argc, J
 static JSValue js_replaceChild(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { if (argc < 2) return JS_UNDEFINED; auto n = get_cpp_node(ctx, this_val); auto nc = get_cpp_node(ctx, argv[0]); auto oc = get_cpp_node(ctx, argv[1]); if (!n || !nc || !oc) return JS_UNDEFINED; n->replaceChild(nc, oc); return JS_DupValue(ctx, argv[1]); }
 
 } // namespace
-
-extern "C" {
 
 void dom_define_node_proto(JSContext* ctx) {
     JSRuntime* rt = JS_GetRuntime(ctx);
@@ -256,4 +251,9 @@ void dom_adapter_unregister_runtime(JSRuntime* rt) {
 
 int dom_define_core(JSContext* ctx) { dom_define_node_proto(ctx); return 0; }
 
-} // extern "C"
+// Attach document factory methods (internal API now that js_create* are static)
+void dom_attach_document_factories(JSContext* ctx, JSValue document) {
+    JS_SetPropertyStr(ctx, document, "createElement", JS_NewCFunction(ctx, js_createElement, "createElement", 1));
+    JS_SetPropertyStr(ctx, document, "createElementNS", JS_NewCFunction(ctx, js_createElementNS, "createElementNS", 2));
+    JS_SetPropertyStr(ctx, document, "createTextNode", JS_NewCFunction(ctx, js_createTextNode, "createTextNode", 1));
+}

@@ -57,10 +57,8 @@ TestResult run_preact_test(const char *test_js, const char *output_html, const c
     global = JS_GetGlobalObject(ctx);
     document = dom_create_document(ctx);
     JS_SetPropertyStr(ctx, global, "document", JS_DupValue(ctx, document));
-    // Expose factory methods bound to document
-    JS_SetPropertyStr(ctx, document, "createElement", JS_NewCFunction(ctx, js_createElement, "createElement", 1));
-    JS_SetPropertyStr(ctx, document, "createElementNS", JS_NewCFunction(ctx, js_createElementNS, "createElementNS", 2));
-    JS_SetPropertyStr(ctx, document, "createTextNode", JS_NewCFunction(ctx, js_createTextNode, "createTextNode", 1));
+    // Expose factory methods via adapter helper (internal js_create* now static)
+    dom_attach_document_factories(ctx, document);
     body = JS_GetPropertyStr(ctx, document, "body");
     JS_SetPropertyStr(ctx, global, "window", JS_DupValue(ctx, global));
     JS_SetPropertyStr(ctx, global, "self", JS_DupValue(ctx, global));
