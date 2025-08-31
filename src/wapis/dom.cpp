@@ -90,29 +90,8 @@ void Node::setTextContent(const std::string& v) {
     }
 }
 
-std::string Node::innerHTML() const {
-    // Minimal: concatenate textContent of descendants (no tags) for non-text nodes.
-    if (nodeType == NodeType::TEXT) return nodeValue; // Text node innerHTML == value
-    return textContent();
-}
+// Removed Node::innerHTML / outerHTML to align closer with spec (they belong to Element)
 
-void Node::setInnerHTML(const std::string& html) {
-    // Minimal: treat as plain text (no tag parsing). Could expand later.
-    setTextContent(html);
-}
-
-std::string Node::outerHTML() const {
-    if (nodeType == NodeType::TEXT) return nodeValue;
-    if (nodeType == NodeType::DOCUMENT) return innerHTML();
-    if (nodeType == NodeType::ELEMENT) {
-        auto self = static_cast<const Element*>(this);
-        std::string s = self->serializeOpenTag();
-        for (auto &c : childNodes) if (c) s += c->outerHTML();
-        s += "</" + self->tagName + ">";
-        return s;
-    }
-    return innerHTML();
-}
 
 void Node::addEventListener(const std::string& type) {
     listenerCounts[type]++;
@@ -227,6 +206,34 @@ std::string Element::serializeOpenTag() const {
         s += " " + kv.first + "=\"" + kv.second + "\"";
     }
     s += ">";
+    return s;
+}
+
+// Element innerHTML / outerHTML (minimal implementations)
+std::string Element::innerHTML() const {
+    std::string s;
+    for (auto &c : childNodes) if (c) {
+        if (c->nodeType == NodeType::TEXT) s += c->nodeValue;
+        else if (c->nodeType == NodeType::ELEMENT) s += std::static_pointer_cast<Element>(c)->outerHTML();
+        else s += c->textContent();
+    }
+    return s;
+}
+void Element::setInnerHTML(const std::string& html) {
+    for (auto &c : childNodes) if (c) c->parentNode.reset();
+    childNodes.clear();
+    if (!html.empty()) {
+        if (auto doc = std::dynamic_pointer_cast<Document>(ownerDocument.lock())) appendChild(doc->createTextNode(html));
+    }
+}
+std::string Element::outerHTML() const {
+    std::string s = serializeOpenTag();
+    for (auto &c : childNodes) if (c) {
+        if (c->nodeType == NodeType::TEXT) s += c->nodeValue;
+        else if (c->nodeType == NodeType::ELEMENT) s += std::static_pointer_cast<Element>(c)->outerHTML();
+        else s += c->textContent();
+    }
+    s += "</" + tagName + ">";
     return s;
 }
 

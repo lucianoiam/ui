@@ -9,6 +9,36 @@
 #include "wapis/whatwg.h"
 #include <stdlib.h>
 #include <unistd.h>
+// Lexbor for pretty HTML formatting
+#include <lexbor/html/html.h>
+#include <string>
+#include <utility>
+
+// Reusable pretty HTML formatter using Lexbor. Accepts raw outerHTML of <body> subtree.
+static std::string pretty_format_body_html(const char* body_outer_html) {
+    if (!body_outer_html) return {};
+    std::string wrapped = std::string("<html>") + body_outer_html + "</html>";
+    lxb_html_document_t* lxb_doc = lxb_html_document_create();
+    if (!lxb_doc) return body_outer_html; // fallback
+    lxb_status_t st = lxb_html_document_parse(lxb_doc, (const lxb_char_t*)wrapped.c_str(), wrapped.size());
+    if (st != LXB_STATUS_OK) {
+        lxb_html_document_destroy(lxb_doc);
+        return body_outer_html; // fallback
+    }
+    lxb_dom_node_t* body_node = (lxb_dom_node_t*) lxb_html_document_body_element(lxb_doc);
+    std::string pretty;
+    if (body_node) {
+        struct Buf { std::string s; }; Buf buf;
+        auto cb = [](const lxb_char_t* data, size_t len, void* ctx)->lxb_status_t {
+            ((Buf*)ctx)->s.append((const char*)data, len); return LXB_STATUS_OK; };
+        if (lxb_html_serialize_pretty_tree_cb(body_node, LXB_HTML_SERIALIZE_OPT_UNDEF, 0, cb, &buf) == LXB_STATUS_OK) {
+            pretty = std::move(buf.s);
+        }
+    }
+    lxb_html_document_destroy(lxb_doc);
+    if (pretty.empty()) return body_outer_html; // fallback
+    return pretty;
+}
 
 static void diagnostic_atexit() {
     fprintf(stderr, "[DIAG] atexit handler running (normal process teardown)\n");
@@ -39,7 +69,7 @@ static void dump_exception(JSContext *ctx);
 double run_test(JSContext *ctx, const char *filename);
 
 
-TestResult run_preact_test(const char *test_js, const char *output_html, const char *serialize_dom_js, size_t serialize_dom_js_len, const char *preact_js_path, const char *hooks_js_path, const char *test_label, const char *benchmark_label) {
+TestResult run_preact_test(const char *test_js, const char *output_html, const char *preact_js_path, const char *hooks_js_path, const char *test_label, const char *benchmark_label) {
 
     TestResult result = {0};
     JSRuntime *rt = JS_NewRuntime();
@@ -47,7 +77,7 @@ TestResult run_preact_test(const char *test_js, const char *output_html, const c
     int error = 0;
     size_t preact_js_len = 0, hooks_js_len = 0;
     char *preact_js = NULL, *hooks_js = NULL;
-    JSValue r = JS_UNDEFINED, serialize_fn = JS_UNDEFINED, html_val = JS_UNDEFINED;
+    JSValue r = JS_UNDEFINED, html_val = JS_UNDEFINED;
     const char *html = NULL;
     JSValue global = JS_UNDEFINED, document = JS_UNDEFINED, body = JS_UNDEFINED;
     const char *assign_hooks = "if (typeof preactHooks !== 'undefined') preact.hooks = preactHooks;";
@@ -96,31 +126,23 @@ TestResult run_preact_test(const char *test_js, const char *output_html, const c
     // Ensure output directory exists
     mkdir("output", 0777);
 
-    // DOM serialization (not included in benchmark)
-    r = JS_Eval(ctx, serialize_dom_js, serialize_dom_js_len, "src/tests/serialize_dom.js", JS_EVAL_TYPE_GLOBAL);
-    if (JS_IsException(r)) dump_exception(ctx);
-    JS_FreeValue(ctx, r);
-
-    serialize_fn = JS_GetPropertyStr(ctx, global, "serialize_dom");
-    if (JS_IsFunction(ctx, serialize_fn)) {
-        html_val = JS_Call(ctx, serialize_fn, global, 0, NULL);
-        if (!JS_IsException(html_val)) {
-            html = JS_ToCString(ctx, html_val);
-            if (html) {
-                printf("%s\n%s\n", test_label, html);
-                FILE *f = fopen(output_html, "w");
-                if (f) { fputs(html, f); fclose(f); result.success = 1; }
-                else { fprintf(stderr, "Failed to open %s for writing\n", output_html); }
-                JS_FreeCString(ctx, html);
-            }
-        } else {
-            dump_exception(ctx);
+    // Serialize via body.outerHTML (standard property on Element)
+    html_val = JS_GetPropertyStr(ctx, body, "outerHTML");
+    if (!JS_IsException(html_val)) {
+        html = JS_ToCString(ctx, html_val);
+        if (html) {
+            std::string pretty = pretty_format_body_html(html);
+            const char* final_html = pretty.c_str();
+            printf("%s\n%s\n", test_label, final_html);
+            FILE *f = fopen(output_html, "w");
+            if (f) { fputs(final_html, f); fclose(f); result.success = 1; }
+            else { fprintf(stderr, "Failed to open %s for writing\n", output_html); }
+            JS_FreeCString(ctx, html);
         }
-        JS_FreeValue(ctx, html_val);
     } else {
-        fprintf(stderr, "serialize_dom is not a function!\n");
+        dump_exception(ctx);
     }
-    JS_FreeValue(ctx, serialize_fn);
+    JS_FreeValue(ctx, html_val);
 
 cleanup:
     fprintf(stderr, "[DEBUG] Cleanup: start\n");
@@ -210,12 +232,7 @@ int main(int argc, char **argv) {
     atexit(diagnostic_atexit);
     // Enable core dumps for segfault debugging
     #include <sys/resource.h>
-    size_t serialize_dom_js_len = 0;
-    char *serialize_dom_js = load_file("src/tests/serialize_dom.js", &serialize_dom_js_len);
-    if (!serialize_dom_js) {
-        fprintf(stderr, "Failed to load src/tests/serialize_dom.js\n");
-        return 1;
-    }
+    // No external serializer needed (using body.outerHTML)
     const char* run_only = getenv("RUN_ONLY");
     int which = run_only ? atoi(run_only) : 0; // 0 = both
     const char* stress = getenv("DOM_STRESS_LOOPS");
@@ -229,8 +246,6 @@ int main(int argc, char **argv) {
             run_preact_test(
                 "src/tests/bruteforce.js",
                 "output/bruteforce.html",
-                serialize_dom_js,
-                serialize_dom_js_len,
                 "build/preact.js",
                 "build/preact_hooks.js",
                 "[TEST 1 OUTPUT]",
@@ -242,8 +257,6 @@ int main(int argc, char **argv) {
             run_preact_test(
                 "src/tests/complex.js",
                 "output/complex.html",
-                serialize_dom_js,
-                serialize_dom_js_len,
                 "build/preact.js",
                 "build/preact_hooks.js",
                 "[TEST 2 OUTPUT]",
@@ -265,8 +278,6 @@ int main(int argc, char **argv) {
         run_preact_test(
             "src/tests/bruteforce.js",
             "output/bruteforce.html",
-            serialize_dom_js,
-            serialize_dom_js_len,
             "build/preact.js",
             "build/preact_hooks.js",
             "[TEST 1 OUTPUT]",
@@ -279,8 +290,6 @@ int main(int argc, char **argv) {
         run_preact_test(
             "src/tests/complex.js",
             "output/complex.html",
-            serialize_dom_js,
-            serialize_dom_js_len,
             "build/preact.js",
             "build/preact_hooks.js",
             "[TEST 2 OUTPUT]",
@@ -288,7 +297,7 @@ int main(int argc, char **argv) {
         );
         #endif
     }
-    free(serialize_dom_js);
+    // No serializer buffer to free
     const char* exit_mode = getenv("DOM_EXIT_MODE");
     if (exit_mode) {
         if (!strcmp(exit_mode, "fast")) {

@@ -37,10 +37,7 @@ public:
     virtual std::string textContent() const;            // Concatenate descendant text nodes
     virtual void setTextContent(const std::string& v);  // Replace children (or value for Text)
 
-    // --- Inner HTML (basic serialization / parsing stub) ---
-    virtual std::string innerHTML() const;              // Serialize children (very minimal)
-    virtual void setInnerHTML(const std::string& html); // Replace children from simple HTML/text (stub)
-    virtual std::string outerHTML() const;              // Serialize this node including its tag if Element
+    // NOTE: innerHTML/outerHTML removed from Node to better match spec (they belong on Element).
 
     // --- Event listeners (engine-agnostic bookkeeping) ---
     void addEventListener(const std::string& type);
@@ -70,16 +67,23 @@ public:
     std::string getAttribute(const std::string& name) const;
     void removeAttribute(const std::string& name);
 
-    // Convenience DOM-style accessors
-    std::string className() const { return getAttribute("class"); }
-    void setClassName(const std::string& v) { setAttribute("class", v); }
-    const std::string& getStyleCssText() const { return styleCssText; }
-    // Setting cssText also updates the "style" attribute for serialization
-    void setStyleCssText(const std::string& v) {
+    // Convenience DOM-style accessors (NON-STANDARD shorthands for get/setAttribute("class"))
+    // Consider removing if strict surface needed.
+    std::string className() const { return getAttribute("class"); } // NON-STANDARD
+    void setClassName(const std::string& v) { setAttribute("class", v); } // NON-STANDARD
+    // innerHTML / outerHTML (basic, minimal) -- NON-STANDARD SIMPLIFIED IMPLEMENTATION
+    std::string innerHTML() const;              // Serialize children (very minimal)
+    void setInnerHTML(const std::string& html); // Replace children from simple HTML/text (stub)
+    std::string outerHTML() const;              // Serialize this element including its tag
+
+#ifndef DOM_EXCLUDE_STYLE_HELPERS
+    const std::string& getStyleCssText() const { return styleCssText; } // NON-STANDARD convenience
+    void setStyleCssText(const std::string& v) { // NON-STANDARD convenience; syncs style attribute
         styleCssText = v;
         attributes["style"] = v;
     }
-    std::string serializeOpenTag() const; // helper for HTML
+#endif
+    std::string serializeOpenTag() const; // INTERNAL NON-STANDARD helper
 
     // --- Query methods ---
     std::vector<std::shared_ptr<Element>> getElementsByTagName(const std::string& name) const;
