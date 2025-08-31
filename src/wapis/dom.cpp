@@ -68,6 +68,70 @@ bool Node::hasChildNodes() const {
     return !childNodes.empty();
 }
 
+std::string Node::textContent() const {
+    if (nodeType == NodeType::TEXT) return nodeValue;
+    std::string acc;
+    acc.reserve(64);
+    for (auto &c : childNodes) {
+        if (!c) continue;
+        if (c->nodeType == NodeType::TEXT) acc += c->nodeValue; else acc += c->textContent();
+    }
+    return acc;
+}
+
+void Node::setTextContent(const std::string& v) {
+    if (nodeType == NodeType::TEXT) { nodeValue = v; return; }
+    for (auto &c : childNodes) if (c) c->parentNode.reset();
+    childNodes.clear();
+    if (!v.empty()) {
+        if (auto doc = std::dynamic_pointer_cast<Document>(ownerDocument.lock())) {
+            appendChild(doc->createTextNode(v));
+        }
+    }
+}
+
+std::string Node::innerHTML() const {
+    // Minimal: concatenate textContent of descendants (no tags) for non-text nodes.
+    if (nodeType == NodeType::TEXT) return nodeValue; // Text node innerHTML == value
+    return textContent();
+}
+
+void Node::setInnerHTML(const std::string& html) {
+    // Minimal: treat as plain text (no tag parsing). Could expand later.
+    setTextContent(html);
+}
+
+std::string Node::outerHTML() const {
+    if (nodeType == NodeType::TEXT) return nodeValue;
+    if (nodeType == NodeType::DOCUMENT) return innerHTML();
+    if (nodeType == NodeType::ELEMENT) {
+        auto self = static_cast<const Element*>(this);
+        std::string s = self->serializeOpenTag();
+        for (auto &c : childNodes) if (c) s += c->outerHTML();
+        s += "</" + self->tagName + ">";
+        return s;
+    }
+    return innerHTML();
+}
+
+void Node::addEventListener(const std::string& type) {
+    listenerCounts[type]++;
+}
+void Node::removeEventListener(const std::string& type) {
+    auto it = listenerCounts.find(type);
+    if (it != listenerCounts.end()) {
+        if (it->second > 1) --it->second; else listenerCounts.erase(it);
+    }
+}
+bool Node::hasEventListener(const std::string& type) const {
+    return listenerCounts.find(type) != listenerCounts.end();
+}
+
+void Node::dispatchEvent(const std::string& type) {
+    // Placeholder: just check if any listener registered; real impl would queue tasks.
+    (void)type; // no-op; adapter may integrate later.
+}
+
 std::shared_ptr<Node> Node::firstChild() const {
     return childNodes.empty() ? nullptr : childNodes.front();
 }
@@ -150,6 +214,16 @@ std::shared_ptr<Text> Document::createTextNode(const std::string& value) {
     t->ownerDocument = shared_from_this();
     t->debugId = g_node_id_counter.fetch_add(1, std::memory_order_relaxed);
     return t;
+}
+
+std::string Element::serializeOpenTag() const {
+    std::string s;
+    s += "<" + tagName;
+    for (auto &kv : attributes) {
+        s += " " + kv.first + "=\"" + kv.second + "\"";
+    }
+    s += ">";
+    return s;
 }
 
 // --- Factory ---
