@@ -91,6 +91,10 @@ INCLUDES=(
 SOURCES=(
   "$SRC_DIR/main.mm"
   "$SRC_DIR/scratch/SkiaDisplay.mm"
+  "$SRC_DIR/gfx/sk_canvas_view.cpp"
+  "$SRC_DIR/renderer/dom_observer.cpp"
+  "$SRC_DIR/renderer/renderer.cpp"
+  "$SRC_DIR/renderer/scheduler.cpp"
   "$SRC_DIR/wapis/dom_adapter.cpp"
   "$SRC_DIR/wapis/dom.cpp"
   "$SRC_DIR/wapis/whatwg.c"

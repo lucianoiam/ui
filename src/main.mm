@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include "wapis/dom_adapter.h"
+#include "wapis/dom.hpp" // for dom::Element attribute access
 #include "wapis/whatwg.h"
 #include <stdlib.h>
 #include <unistd.h>
@@ -13,6 +14,14 @@
 #include <lexbor/html/html.h>
 #include <string>
 #include <utility>
+#include "gfx/sk_canvas_view.h"
+#include "renderer/renderer.h"
+#include "renderer/scheduler.h"
+#import <Cocoa/Cocoa.h>
+#include <include/core/SkImage.h>
+#include <include/core/SkCanvas.h>
+#include <include/core/SkSurface.h>
+#include <random>
 
 // Reusable pretty HTML formatter using Lexbor. Accepts raw outerHTML of <body> subtree.
 static std::string pretty_format_body_html(const char* body_outer_html) {
@@ -76,8 +85,9 @@ struct DiagnosticDtor {
 
 // Uncomment to enable each test
 
-#define ENABLE_TEST_1
-#define ENABLE_TEST_2
+//#define ENABLE_TEST_1 // disabled (kept for reference)
+//#define ENABLE_TEST_2 // disabled (kept for reference)
+#define ENABLE_TEST_3   // new render test
 
 
 typedef struct {
@@ -85,13 +95,39 @@ typedef struct {
     int success;
 } TestResult;
 
+// Deferred environment (only used for live render window test)
+static JSRuntime *g_deferred_rt = nullptr;
+static JSContext *g_deferred_ctx = nullptr;
+static JSValue g_deferred_global = JS_UNDEFINED;
+static JSValue g_deferred_document = JS_UNDEFINED;
+static JSValue g_deferred_body = JS_UNDEFINED;
+
+static void do_runtime_full_cleanup(JSRuntime *rt, JSContext *ctx, JSValue global, JSValue document, JSValue body) {
+    if (!ctx || !rt) return;
+    fprintf(stderr, "[DEBUG] (deferred) Cleanup: start\n");
+    JS_SetPropertyStr(ctx, global, "document", JS_UNDEFINED);
+    if (!JS_IsUndefined(document)) JS_SetPropertyStr(ctx, document, "body", JS_UNDEFINED);
+    if (!JS_IsUndefined(body)) JS_FreeValue(ctx, body);
+    if (!JS_IsUndefined(document)) JS_FreeValue(ctx, document);
+    if (!JS_IsUndefined(global)) JS_FreeValue(ctx, global);
+    JS_RunGC(rt);
+    dom_runtime_cleanup(ctx);
+    JS_RunGC(rt);
+    for (int i=0;i<3;i++) JS_RunGC(rt);
+    JS_FreeContext(ctx);
+    { volatile char *p = (char*)malloc(16); if (p) { p[0]=0; free((void*)p);} }
+    dom_adapter_unregister_runtime(rt);
+    JS_FreeRuntime(rt);
+    fprintf(stderr, "[DEBUG] (deferred) Cleanup: end\n");
+}
+
 // Forward declarations
 static char *load_file(const char *filename, size_t *out_len);
 static void dump_exception(JSContext *ctx);
 double run_test(JSContext *ctx, const char *filename);
 
 
-TestResult run_preact_test(const char *test_js, const char *output_html, const char *preact_js_path, const char *hooks_js_path, const char *test_label, const char *benchmark_label) {
+TestResult run_preact_test(const char *test_js, const char *output_html, const char *preact_js_path, const char *hooks_js_path, const char *test_label, const char *benchmark_label, bool defer_cleanup) {
 
     TestResult result = {0};
     JSRuntime *rt = JS_NewRuntime();
@@ -115,6 +151,11 @@ TestResult run_preact_test(const char *test_js, const char *output_html, const c
     JS_SetPropertyStr(ctx, global, "window", JS_DupValue(ctx, global));
     JS_SetPropertyStr(ctx, global, "self", JS_DupValue(ctx, global));
     JS_SetPropertyStr(ctx, global, "globalThis", JS_DupValue(ctx, global));
+    // Install gfx (Skia surface) helpers
+    gfx_install_js(ctx);
+    // Initialize renderer (DOM observer)
+    scheduler_init();
+    renderer_init();
 
     preact_js = load_file(preact_js_path, &preact_js_len);
     if (!preact_js) {
@@ -182,37 +223,38 @@ TestResult run_preact_test(const char *test_js, const char *output_html, const c
     JS_FreeValue(ctx, html_val);
 
 cleanup:
-    fprintf(stderr, "[DEBUG] Cleanup: start\n");
-    // Break JS reachability first so that freeing our duplicate wrapper refs
-    // actually lets finalizers run during dom_runtime_cleanup.
-    JS_SetPropertyStr(ctx, global, "document", JS_UNDEFINED);
-    if (!JS_IsUndefined(document)) JS_SetPropertyStr(ctx, document, "body", JS_UNDEFINED);
-    // Drop local references (they are dup'd when stored on objects)
-    if (!JS_IsUndefined(body)) JS_FreeValue(ctx, body);
-    if (!JS_IsUndefined(document)) JS_FreeValue(ctx, document);
-    if (!JS_IsUndefined(global)) JS_FreeValue(ctx, global);
-    // Now run DOM runtime cleanup which frees duplicate refs kept for identity
-    const char* disableCleanup = getenv("DOM_DISABLE_CLEANUP");
-    if (!disableCleanup || !*disableCleanup) {
-        // Run an extra GC before wrapper free to reduce objects finalizing after context destruction
-        JS_RunGC(rt);
-        dom_runtime_cleanup(ctx);
-        JS_RunGC(rt);
+    if (defer_cleanup && !error) {
+        // Preserve environment for later (window compositing needs DOM + renderer data)
+        g_deferred_rt = rt;
+        g_deferred_ctx = ctx;
+        g_deferred_global = global;
+        g_deferred_document = document;
+        g_deferred_body = body;
+        fprintf(stderr, "[DEBUG] Deferred cleanup (keeping runtime alive for window)\n");
     } else {
-        fprintf(stderr, "[MAIN] DOM cleanup skipped due to DOM_DISABLE_CLEANUP env var\n");
+        fprintf(stderr, "[DEBUG] Cleanup: start\n");
+        JS_SetPropertyStr(ctx, global, "document", JS_UNDEFINED);
+        if (!JS_IsUndefined(document)) JS_SetPropertyStr(ctx, document, "body", JS_UNDEFINED);
+        if (!JS_IsUndefined(body)) JS_FreeValue(ctx, body);
+        if (!JS_IsUndefined(document)) JS_FreeValue(ctx, document);
+        if (!JS_IsUndefined(global)) JS_FreeValue(ctx, global);
+        const char* disableCleanup = getenv("DOM_DISABLE_CLEANUP");
+        if (!disableCleanup || !*disableCleanup) {
+            JS_RunGC(rt);
+            dom_runtime_cleanup(ctx);
+            JS_RunGC(rt);
+        } else {
+            fprintf(stderr, "[MAIN] DOM cleanup skipped due to DOM_DISABLE_CLEANUP env var\n");
+        }
+        for (int i = 0; i < 3; ++i) JS_RunGC(rt);
+        fprintf(stderr, "[DEBUG] Freeing JSContext and JSRuntime\n");
+        JS_FreeContext(ctx);
+        { volatile char *p = (char*)malloc(16); if (p) { p[0]=0; free((void*)p);} }
+        dom_adapter_unregister_runtime(rt);
+        JS_FreeRuntime(rt);
     }
-    for (int i = 0; i < 3; ++i) JS_RunGC(rt);
-    fprintf(stderr, "[DEBUG] Freeing JSContext and JSRuntime\n");
-    JS_FreeContext(ctx);
-    // Fence: allocate & free small block to catch use-after-free earlier
-    { volatile char *p = (char*)malloc(16); if (p) { p[0]=0; free((void*)p);} }
-    // Clear adapter registration prior to freeing runtime (defensive)
-    dom_adapter_unregister_runtime(rt);
-    JS_FreeRuntime(rt);
-    // Marker file for post-run analysis (best-effort)
     FILE* mf = fopen("output/last_run_ok.marker", "w"); if (mf) { fputs("ok", mf); fclose(mf);} 
     fflush(stdout);
-    fprintf(stderr, "[DEBUG] Cleanup: end\n");
     if (!error && result.elapsed >= 0)
         printf("%s: %.1f ms\n", benchmark_label, result.elapsed);
     return result;
@@ -300,6 +342,18 @@ int main(int argc, char **argv) {
                 "[BENCHMARK] Preact app + DOM complexity test"
             );
             #endif
+        } else if (testId == 3) {
+            #ifdef ENABLE_TEST_3
+            run_preact_test(
+                "src/tests/render.js",
+                "output/render.html",
+                "build/preact.js",
+                "build/preact_hooks.js",
+                "[TEST 3 OUTPUT]",
+                "[BENCHMARK] Preact app + DOM render test",
+                true /* defer cleanup so DOM stays alive for live window */
+            );
+            #endif
         }
     };
 
@@ -318,7 +372,8 @@ int main(int argc, char **argv) {
             "build/preact.js",
             "build/preact_hooks.js",
             "[TEST 1 OUTPUT]",
-            "[BENCHMARK] Preact app + DOM brute force test"
+            "[BENCHMARK] Preact app + DOM brute force test",
+            false
         );
         #endif
     }
@@ -330,7 +385,21 @@ int main(int argc, char **argv) {
             "build/preact.js",
             "build/preact_hooks.js",
             "[TEST 2 OUTPUT]",
-            "[BENCHMARK] Preact app + DOM complexity test"
+            "[BENCHMARK] Preact app + DOM complexity test",
+            false
+        );
+        #endif
+    }
+    if (stress_loops == 0 && (which == 0 || which == 3)) {
+        #ifdef ENABLE_TEST_3
+        run_preact_test(
+            "src/tests/render.js",
+            "output/render.html",
+            "build/preact.js",
+            "build/preact_hooks.js",
+            "[TEST 3 OUTPUT]",
+            "[BENCHMARK] Preact app + DOM render test",
+            true
         );
         #endif
     }
@@ -343,6 +412,77 @@ int main(int argc, char **argv) {
         } else if (!strcmp(exit_mode, "abort")) {
             fprintf(stderr, "[DIAG] abort() requested\n");
             abort();
+        }
+    }
+    // After running tests, open a simple 800x600 window and draw each layer as a random 64x64 colored square
+    @autoreleasepool {
+        NSApplication *app = [NSApplication sharedApplication];
+        [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+        static id appDel = nil; if (!appDel) appDel = [NSObject new];
+        NSRect frame = NSMakeRect(0, 0, 800, 600);
+        NSWindow *window = [[NSWindow alloc] initWithContentRect:frame
+                                                       styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)
+                                                         backing:NSBackingStoreBuffered
+                                                           defer:NO];
+        [window setTitle:@"Renderer Layers"];
+        [window makeKeyAndOrderFront:nil];
+        [NSApp activateIgnoringOtherApps:YES];
+
+        // Create an NSImageView backed by a bitmap we paint into via Skia
+        int W=800,H=600;
+        SkImageInfo info = SkImageInfo::Make(W, H, kN32_SkColorType, kPremul_SkAlphaType);
+        sk_sp<SkSurface> surface = SkSurfaces::Raster(info);
+            if (surface) {
+            SkCanvas* canvas = surface->getCanvas();
+            // Dark grey window background
+            canvas->clear(SkColorSetARGB(255,0x20,0x20,0x20));
+            int index = 0;
+            extern bool gfx_get_size(int id, int* w, int* h);
+            extern sk_sp<SkImage> gfx_snapshot(int id);
+            extern int dom_element_canvas_id(dom::Element* el, bool createIfMissing);
+            renderer_for_each_layer([&](RenderLayer* rl){
+                int id = dom_element_canvas_id(rl->element, false);
+                if (!id) return; // only composite elements that explicitly created a canvas via JS
+                int x = 0, y = 0;
+                if (rl->element) {
+                    auto it = rl->element->attributes.find("style");
+                    if (it != rl->element->attributes.end()) {
+                        const std::string& s = it->second;
+                        auto findInt=[&](const char* key){ size_t p = s.find(key); if(p!=std::string::npos){ size_t c=s.find(':',p); size_t sc=s.find(';',c); if(c!=std::string::npos){ std::string num = s.substr(c+1, sc==std::string::npos?std::string::npos:sc-(c+1)); try { return std::stoi(num); } catch(...){} } } return -1; };
+                        int lx = findInt("left"); if(lx>=0) x = lx;
+                        int ty = findInt("top"); if(ty>=0) y = ty;
+                    }
+                }
+                int w=0,h=0; if(!gfx_get_size(id,&w,&h)){ w=h=64; }
+                auto img = gfx_snapshot(id);
+                if (img) {
+                    canvas->drawImage(img.get(), (SkScalar)x, (SkScalar)y);
+                    SkPaint border; border.setStyle(SkPaint::kStroke_Style); border.setColor(SK_ColorWHITE); border.setStrokeWidth(1);
+                    canvas->drawRect(SkRect::MakeXYWH(x, y, w, h), border);
+                    ++index; return; }
+            });
+            SkPixmap pixmap; if (surface->peekPixels(&pixmap)) {
+                CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+                CGBitmapInfo bitmapInfo = kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big;
+                CGDataProviderRef provider = CGDataProviderCreateWithData(NULL, pixmap.addr(), pixmap.rowBytes()*pixmap.height(), NULL);
+                CGImageRef cgImage = CGImageCreate(pixmap.width(), pixmap.height(), 8, 32, pixmap.rowBytes(), colorSpace, bitmapInfo, provider, NULL, false, kCGRenderingIntentDefault);
+                if (cgImage) {
+                    NSImage *img = [[NSImage alloc] initWithCGImage:cgImage size:NSMakeSize(W,H)];
+                    NSImageView *iv = [[NSImageView alloc] initWithFrame:frame];
+                    [iv setImage:img];
+                    [window setContentView:iv];
+                    CGImageRelease(cgImage);
+                }
+                CGDataProviderRelease(provider);
+                CGColorSpaceRelease(colorSpace);
+            }
+        }
+        [app run];
+        // After window loop exits (user closed window), perform deferred cleanup if any
+        if (g_deferred_rt && g_deferred_ctx) {
+            do_runtime_full_cleanup(g_deferred_rt, g_deferred_ctx, g_deferred_global, g_deferred_document, g_deferred_body);
+            g_deferred_rt = nullptr; g_deferred_ctx = nullptr;
+            g_deferred_global = g_deferred_document = g_deferred_body = JS_UNDEFINED;
         }
     }
     return 0;

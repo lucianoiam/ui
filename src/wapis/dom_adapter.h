@@ -2,6 +2,7 @@
 #ifndef DOM_ADAPTER_H
 #define DOM_ADAPTER_H
 #include <quickjs.h>
+namespace dom { class Element; }
 // Public adapter API (C++ linkage). Responsibilities:
 //  - dom_define_node_proto: registers the shared DOMNode prototype & class with a context
 //  - dom_create_document: returns a new Document (with body) bridged to C++ DOM
@@ -24,4 +25,6 @@ void dom_runtime_cleanup(JSContext *ctx);
 void dom_adapter_unregister_runtime(JSRuntime* rt);
 // Attach createElement/createElementNS/createTextNode functions to a document
 void dom_attach_document_factories(JSContext* ctx, JSValue document);
+// Retrieve canvas id for a given Element* (returns 0 if none and createIfMissing=false)
+int dom_element_canvas_id(dom::Element* el, bool createIfMissing = false);
 #endif // DOM_ADAPTER_H

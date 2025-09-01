@@ -1,6 +1,8 @@
 // dom_adapter.cpp - QuickJS <-> C++ DOM bridge using dom.hpp backend (renamed from dom_qjs.cpp)
 #include "dom_adapter.h"
 #include "dom.hpp"
+#include "renderer/dom_observer.h"
+#include "gfx/sk_canvas_view.h" // placed outside anonymous namespace to keep gfx_* symbols in global namespace
 #include <quickjs.h>
 #include <memory>
 #include <unordered_map>
@@ -29,6 +31,9 @@ static bool g_in_dom_cleanup = false;
 static bool g_dom_debug = false;
 static size_t g_wrap_count = 0;
 static size_t g_finalize_count = 0;
+// Map each Element* to an associated Skia canvas id (created lazily on first getContext call)
+#include "gfx/sk_canvas_view.h"
+static std::unordered_map<Element*, int> g_element_canvas_ids; // stays internal; accessor provided outside namespace
 
 static void ensure_dom_debug_init() {
     static bool inited = false; if (!inited) { inited = true; const char* e = std::getenv("DOM_DEBUG_LOG"); if (e && *e) g_dom_debug = true; }
@@ -135,6 +140,7 @@ static JSValue js_createElement(JSContext* ctx, JSValueConst this_val, int argc,
     if (!doc) return JS_UNDEFINED;
     const char* tag = JS_ToCString(ctx, argv[0]);
     auto el = doc->createElement(tag);
+    dom_notify_element_created(el.get());
     JS_FreeCString(ctx, tag);
     return wrap_node_js(ctx, el);
 }
@@ -144,6 +150,7 @@ static JSValue js_createElementNS(JSContext* ctx, JSValueConst this_val, int arg
     if (!doc) return JS_UNDEFINED;
     const char* tag = JS_ToCString(ctx, argv[1]);
     auto el = doc->createElement(tag);
+    dom_notify_element_created(el.get());
     JS_FreeCString(ctx, tag);
     return wrap_node_js(ctx, el);
 }
@@ -181,12 +188,29 @@ static JSValue js_get_outerHTML(JSContext* ctx, JSValueConst this_val, int, JSVa
 static JSValue js_addEventListener(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { if(argc<2) return JS_UNDEFINED; const char* name=JS_ToCString(ctx, argv[0]); auto n=get_cpp_node(ctx,this_val); if(n && name) n->addEventListener(name); if(name) JS_FreeCString(ctx,name); return JS_UNDEFINED; }
 static JSValue js_removeEventListener(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { if(argc<2) return JS_UNDEFINED; const char* name=JS_ToCString(ctx, argv[0]); auto n=get_cpp_node(ctx,this_val); if(n && name) n->removeEventListener(name); if(name) JS_FreeCString(ctx,name); return JS_UNDEFINED; }
 static JSValue js_setAttribute(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { if (argc < 2) return JS_UNDEFINED; auto node = get_cpp_node(ctx, this_val); if (!node || node->nodeType != dom::NodeType::ELEMENT) return JS_UNDEFINED; auto el = std::static_pointer_cast<Element>(node); const char* name = JS_ToCString(ctx, argv[0]); const char* value = JS_ToCString(ctx, argv[1]); el->setAttribute(name, value); JS_FreeCString(ctx, name); JS_FreeCString(ctx, value); return JS_UNDEFINED; }
+static JSValue js_setAttribute_with_notify(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc < 2) return JS_UNDEFINED;
+    auto node = get_cpp_node(ctx, this_val);
+    if (!node || node->nodeType != dom::NodeType::ELEMENT) return JS_UNDEFINED;
+    auto el = std::static_pointer_cast<Element>(node);
+    const char* name = JS_ToCString(ctx, argv[0]);
+    const char* value = JS_ToCString(ctx, argv[1]);
+    std::string oldv = el->getAttribute(name);
+    el->setAttribute(name, value);
+    std::string newv = el->getAttribute(name);
+    if (name) {
+        dom_notify_attribute_changed(el.get(), name, oldv, newv);
+    }
+    JS_FreeCString(ctx, name);
+    JS_FreeCString(ctx, value);
+    return JS_UNDEFINED;
+}
 static JSValue js_getAttribute(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { if (argc < 1) return JS_UNDEFINED; auto node = get_cpp_node(ctx, this_val); if (!node || node->nodeType != dom::NodeType::ELEMENT) return JS_UNDEFINED; auto el = std::static_pointer_cast<Element>(node); const char* name = JS_ToCString(ctx, argv[0]); std::string v = el->getAttribute(name); JS_FreeCString(ctx, name); return JS_NewString(ctx, v.c_str()); }
 static JSValue js_removeAttribute(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { if (argc < 1) return JS_UNDEFINED; auto node = get_cpp_node(ctx, this_val); if (!node || node->nodeType != dom::NodeType::ELEMENT) return JS_UNDEFINED; auto el = std::static_pointer_cast<Element>(node); const char* name = JS_ToCString(ctx, argv[0]); el->removeAttribute(name); JS_FreeCString(ctx, name); return JS_UNDEFINED; }
-static JSValue js_appendChild(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { auto n = get_cpp_node(ctx, this_val); if (!n || argc < 1) return JS_UNDEFINED; auto c = get_cpp_node(ctx, argv[0]); if (!c) return JS_UNDEFINED; n->appendChild(c); return JS_DupValue(ctx, argv[0]); }
-static JSValue js_insertBefore(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { auto n = get_cpp_node(ctx, this_val); if (!n || argc < 2) return JS_UNDEFINED; auto nc = get_cpp_node(ctx, argv[0]); auto rc = get_cpp_node(ctx, argv[1]); if (!nc) return JS_UNDEFINED; n->insertBefore(nc, rc); return JS_DupValue(ctx, argv[0]); }
-static JSValue js_removeChild(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { if (argc < 1) return JS_UNDEFINED; auto n = get_cpp_node(ctx, this_val); auto c = get_cpp_node(ctx, argv[0]); if (!n || !c) return JS_UNDEFINED; n->removeChild(c); return JS_DupValue(ctx, argv[0]); }
-static JSValue js_replaceChild(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { if (argc < 2) return JS_UNDEFINED; auto n = get_cpp_node(ctx, this_val); auto nc = get_cpp_node(ctx, argv[0]); auto oc = get_cpp_node(ctx, argv[1]); if (!n || !nc || !oc) return JS_UNDEFINED; n->replaceChild(nc, oc); return JS_DupValue(ctx, argv[1]); }
+static JSValue js_appendChild(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { auto n = get_cpp_node(ctx, this_val); if (!n || argc < 1) return JS_UNDEFINED; auto c = get_cpp_node(ctx, argv[0]); if (!c) return JS_UNDEFINED; n->appendChild(c); if (n->nodeType == dom::NodeType::ELEMENT) dom_notify_childlist_changed(std::static_pointer_cast<Element>(n).get()); return JS_DupValue(ctx, argv[0]); }
+static JSValue js_insertBefore(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { auto n = get_cpp_node(ctx, this_val); if (!n || argc < 2) return JS_UNDEFINED; auto nc = get_cpp_node(ctx, argv[0]); auto rc = get_cpp_node(ctx, argv[1]); if (!nc) return JS_UNDEFINED; n->insertBefore(nc, rc); if (n->nodeType == dom::NodeType::ELEMENT) dom_notify_childlist_changed(std::static_pointer_cast<Element>(n).get()); return JS_DupValue(ctx, argv[0]); }
+static JSValue js_removeChild(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { if (argc < 1) return JS_UNDEFINED; auto n = get_cpp_node(ctx, this_val); auto c = get_cpp_node(ctx, argv[0]); if (!n || !c) return JS_UNDEFINED; n->removeChild(c); if (n->nodeType == dom::NodeType::ELEMENT) dom_notify_childlist_changed(std::static_pointer_cast<Element>(n).get()); if (c->nodeType == dom::NodeType::ELEMENT) dom_notify_element_removed(std::static_pointer_cast<Element>(c).get()); return JS_DupValue(ctx, argv[0]); }
+static JSValue js_replaceChild(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { if (argc < 2) return JS_UNDEFINED; auto n = get_cpp_node(ctx, this_val); auto nc = get_cpp_node(ctx, argv[0]); auto oc = get_cpp_node(ctx, argv[1]); if (!n || !nc || !oc) return JS_UNDEFINED; n->replaceChild(nc, oc); if (n->nodeType == dom::NodeType::ELEMENT) dom_notify_childlist_changed(std::static_pointer_cast<Element>(n).get()); if (oc->nodeType == dom::NodeType::ELEMENT) dom_notify_element_removed(std::static_pointer_cast<Element>(oc).get()); if (nc->nodeType == dom::NodeType::ELEMENT) dom_notify_element_created(std::static_pointer_cast<Element>(nc).get()); return JS_DupValue(ctx, argv[1]); }
 
 // Descriptor tables (properties & methods) for prototype definition
 struct PropDesc { const char* name; JSCFunction* getter; JSCFunction* setter; };
@@ -210,19 +234,91 @@ static const PropDesc kPropGetSet[] = {
     {"outerHTML", js_get_outerHTML, nullptr},
 };
 struct MethodDesc { const char* name; JSCFunction* fn; int length; };
+// forward declare to allow inclusion in table after definition
+static JSValue js_element_getCanvasRenderingContext(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+
+// Canvas-like 2D context object per element (very small subset)
+struct JSCanvasContext2D {
+    int canvasId;
+};
+
+static JSClassID js_canvas_ctx2d_class_id = 0;
+
+static JSValue js_ctx_fillRect(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc < 5) return JS_UNDEFINED;
+    int32_t x=0,y=0,w=0,h=0; int64_t color=0;
+    JS_ToInt32(ctx, &x, argv[0]); JS_ToInt32(ctx, &y, argv[1]); JS_ToInt32(ctx, &w, argv[2]); JS_ToInt32(ctx, &h, argv[3]); JS_ToInt64(ctx, &color, argv[4]);
+    JSCanvasContext2D* c2d = (JSCanvasContext2D*)JS_GetOpaque2(ctx, this_val, js_canvas_ctx2d_class_id);
+    if (c2d) gfx_fill_rect(c2d->canvasId, x,y,w,h,(uint32_t)color);
+    return JS_UNDEFINED;
+}
+static JSValue js_ctx_fillCircle(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc < 4) return JS_UNDEFINED;
+    int32_t cx=0,cy=0,r=0; int64_t color=0xFFFFFFFF;
+    JS_ToInt32(ctx, &cx, argv[0]); JS_ToInt32(ctx, &cy, argv[1]); JS_ToInt32(ctx, &r, argv[2]); if(argc>=4) JS_ToInt64(ctx, &color, argv[3]);
+    JSCanvasContext2D* c2d = (JSCanvasContext2D*)JS_GetOpaque2(ctx, this_val, js_canvas_ctx2d_class_id);
+    if (c2d) gfx_fill_circle(c2d->canvasId, cx,cy,r,(uint32_t)color);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_getCanvasRenderingContext(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    // this_val is the element wrapper
+    auto node = get_cpp_node(ctx, this_val);
+    if (!node || node->nodeType != dom::NodeType::ELEMENT) return JS_NULL;
+    auto el = std::static_pointer_cast<Element>(node);
+    // Ignore any parameter; always return 2D context
+    // Size: check style attribute: style="width:64;height:64" simple parse, else default 64x64
+    int width=64, height=64;
+    std::string style = el->getStyleCssText();
+    // naive parse
+    auto findDecl=[&](const char* key){ size_t p = style.find(key); if(p!=std::string::npos){ size_t c=style.find(':',p); size_t sc=style.find(';',c); if(c!=std::string::npos){ std::string num = style.substr(c+1, sc==std::string::npos?std::string::npos:sc-(c+1)); try { return std::stoi(num); } catch(...){} } } return -1; };
+    int wDecl = findDecl("width"); if (wDecl>0) width = wDecl;
+    int hDecl = findDecl("height"); if (hDecl>0) height = hDecl;
+    int id;
+    auto it = g_element_canvas_ids.find(el.get());
+    if (it == g_element_canvas_ids.end()) { id = gfx_create_canvas(width, height); g_element_canvas_ids[el.get()] = id; }
+    else { id = it->second; }
+    if (!id) return JS_NULL;
+    // Create (or reuse?) a JS context object
+    if (js_canvas_ctx2d_class_id == 0) {
+        JS_NewClassID(JS_GetRuntime(ctx), &js_canvas_ctx2d_class_id);
+        JSClassDef def{}; def.class_name = "CanvasRenderingContext2D"; JS_NewClass(JS_GetRuntime(ctx), js_canvas_ctx2d_class_id, &def);
+    }
+    JSValue ctxObj = JS_NewObjectClass(ctx, js_canvas_ctx2d_class_id);
+    auto *c2d = (JSCanvasContext2D*)js_mallocz(ctx, sizeof(JSCanvasContext2D));
+    c2d->canvasId = id;
+    JS_SetOpaque(ctxObj, c2d);
+    // Attach methods
+    JS_SetPropertyStr(ctx, ctxObj, "fillRect", JS_NewCFunction(ctx, js_ctx_fillRect, "fillRect", 5));
+    JS_SetPropertyStr(ctx, ctxObj, "fillCircle", JS_NewCFunction(ctx, js_ctx_fillCircle, "fillCircle", 4));
+    return ctxObj;
+}
+
 static const MethodDesc kMethods[] = {
     {"appendChild", js_appendChild, 1},
     {"insertBefore", js_insertBefore, 2},
     {"removeChild", js_removeChild, 1},
     {"replaceChild", js_replaceChild, 2},
-    {"setAttribute", js_setAttribute, 2},
+    {"setAttribute", js_setAttribute_with_notify, 2},
     {"getAttribute", js_getAttribute, 1},
     {"removeAttribute", js_removeAttribute, 1},
     {"addEventListener", js_addEventListener, 2},
     {"removeEventListener", js_removeEventListener, 2},
+    {"getCanvasRenderingContext", js_element_getCanvasRenderingContext, 0},
 };
 
 } // namespace
+
+// Public accessor for element-associated canvas id
+int dom_element_canvas_id(dom::Element* el, bool createIfMissing) {
+    if (!el) return 0;
+    auto it = g_element_canvas_ids.find(el);
+    if (it != g_element_canvas_ids.end()) return it->second;
+    if (!createIfMissing) return 0;
+    int id = gfx_create_canvas(64,64);
+    if (id>0) g_element_canvas_ids[el] = id;
+    return id;
+}
 
 void dom_define_node_proto(JSContext* ctx) {
     JSRuntime* rt = JS_GetRuntime(ctx);
