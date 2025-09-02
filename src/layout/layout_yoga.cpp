@@ -239,9 +239,10 @@ void layout_maybe_run(JSContext* ctx) {
     YGNodeRef root = YGNodeNew();
     apply_node_style(root, layoutRootEl->styleCssText);
     if (auto* t = (TempFlexStore*)YGNodeGetContext(root)) { g_flex_meta[layoutRootEl] = t->meta; }
-    // Force viewport size on root flex container
-    YGNodeStyleSetWidth(root, 800);
-    YGNodeStyleSetHeight(root, 600);
+    // Force viewport size on root flex container using centralized defaults (will adapt when dynamic resize added)
+    extern int g_winW; extern int g_winH; // from viewport.h / main.mm
+    YGNodeStyleSetWidth(root, (float)g_winW);
+    YGNodeStyleSetHeight(root, (float)g_winH);
     // Build subtree from layoutRootEl children
     for (auto &c : layoutRootEl->childNodes) {
         if (c && c->nodeType == dom::NodeType::ELEMENT) build_subtree(static_cast<dom::Element*>(c.get()), root);
@@ -250,7 +251,7 @@ void layout_maybe_run(JSContext* ctx) {
     // Apply to layoutRootEl and descendants (single pass). Root is at (0,0).
     apply_layout_recursive(layoutRootEl, root, 0, 0);
     // If layout root isn't body, set body box to viewport for compositor fallback
-    if (layoutRootEl != bodyEl) g_boxes[bodyEl] = Box{0,0,800,600};
+    if (layoutRootEl != bodyEl) { extern int g_winW; extern int g_winH; g_boxes[bodyEl] = Box{0,0,(float)g_winW,(float)g_winH}; }
     // Collect contexts for deletion
     std::vector<TempFlexStore*> toFree;
     // Iterative stack to gather contexts

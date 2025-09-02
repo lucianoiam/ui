@@ -11,7 +11,8 @@ function Box({ style='', children }) {
 }
 
 function App(){
-  return htm`<div style="display:flex; flex-direction:column; width:800px; height:600px;">
+  // Root div relies on internal viewport sizing; no explicit width/height.
+  return htm`<div style="display:flex; flex-direction:column;">
     <${Box} style="flex:2;"></${Box}>
     <${Box} style="display:flex; flex-direction:row; flex:1;">
       <${Box} style="flex:1;"></${Box}>
@@ -26,4 +27,3 @@ function App(){
 }
 
 render(htm`<${App} />`, document.body);
-if (typeof requestComposite === 'function') requestComposite();
