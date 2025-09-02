@@ -520,8 +520,8 @@ if(!globalThis.__dispatchNativeMouseInstalled){
     globalThis.__dispatchNativeMouseInstalled=true;
     globalThis.__dispatchNativeMouse=function(ev){
         if(!ev||!ev.type)return; const t=ev.type; const x=ev.clientX|0; const y=ev.clientY|0;
-        // Simple hit test (divs only)
-        var target=null; var nodes=document.getElementsByTagName?Array.from(document.getElementsByTagName('div')):[];
+    // Simple hit test (canvas only, post-migration)
+    var target=null; var nodes=document.getElementsByTagName?Array.from(document.getElementsByTagName('canvas')):[];
         for(var i=nodes.length-1;i>=0;i--){
             var n=nodes[i]; var st=n.getAttribute? (n.getAttribute('style')||''):'';
             var mW=st.match(/width:(\d+)/); var mH=st.match(/height:(\d+)/); var mL=st.match(/left:(\d+)/); var mT=st.match(/top:(\d+)/);

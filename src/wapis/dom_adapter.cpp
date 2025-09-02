@@ -311,7 +311,7 @@ static const PropDesc kPropGetSet[] = {
 };
 struct MethodDesc { const char* name; JSCFunction* fn; int length; };
 // forward declare to allow inclusion in table after definition
-static JSValue js_element_getCanvasRenderingContext(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 
 // Canvas-like 2D context object per element (very small subset)
 struct JSCanvasContext2D {
@@ -337,34 +337,32 @@ static JSValue js_ctx_fillCircle(JSContext* ctx, JSValueConst this_val, int argc
     return JS_UNDEFINED;
 }
 
-static JSValue js_element_getCanvasRenderingContext(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    // this_val is the element wrapper
+static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto node = get_cpp_node(ctx, this_val);
     if (!node || node->nodeType != dom::NodeType::ELEMENT) return JS_NULL;
     auto el = std::static_pointer_cast<Element>(node);
-    // Ignore any parameter; always return 2D context
-    // Size: check style attribute: style="width:64;height:64" simple parse, else default 64x64
+    // Only allow on <canvas>
+    std::string tag = el->tagName; for (auto &c: tag) c = (char)tolower(c);
+    if (tag != "canvas") return JS_NULL;
+    // Expect first argument '2d'
+    if (argc>0) {
+        const char* arg0 = JS_IsString(argv[0]) ? JS_ToCString(ctx, argv[0]) : nullptr;
+        bool ok = arg0 && std::string(arg0) == "2d";
+        if (arg0) JS_FreeCString(ctx, arg0);
+        if (!ok) return JS_NULL;
+    }
     int width=64, height=64;
     std::string style = el->getStyleCssText();
-    // naive parse
     auto findDecl=[&](const char* key){ size_t p = style.find(key); if(p!=std::string::npos){ size_t c=style.find(':',p); size_t sc=style.find(';',c); if(c!=std::string::npos){ std::string num = style.substr(c+1, sc==std::string::npos?std::string::npos:sc-(c+1)); try { return std::stoi(num); } catch(...){} } } return -1; };
     int wDecl = findDecl("width"); if (wDecl>0) width = wDecl;
     int hDecl = findDecl("height"); if (hDecl>0) height = hDecl;
-    int id;
-    auto it = g_element_canvas_ids.find(el.get());
+    int id; auto it = g_element_canvas_ids.find(el.get());
     if (it == g_element_canvas_ids.end()) { id = gfx_create_canvas(width, height); g_element_canvas_ids[el.get()] = id; }
-    else { id = it->second; }
+    else id = it->second;
     if (!id) return JS_NULL;
-    // Create (or reuse?) a JS context object
-    if (js_canvas_ctx2d_class_id == 0) {
-        JS_NewClassID(JS_GetRuntime(ctx), &js_canvas_ctx2d_class_id);
-        JSClassDef def{}; def.class_name = "CanvasRenderingContext2D"; JS_NewClass(JS_GetRuntime(ctx), js_canvas_ctx2d_class_id, &def);
-    }
+    if (js_canvas_ctx2d_class_id == 0) { JS_NewClassID(JS_GetRuntime(ctx), &js_canvas_ctx2d_class_id); JSClassDef def{}; def.class_name = "CanvasRenderingContext2D"; JS_NewClass(JS_GetRuntime(ctx), js_canvas_ctx2d_class_id, &def); }
     JSValue ctxObj = JS_NewObjectClass(ctx, js_canvas_ctx2d_class_id);
-    auto *c2d = (JSCanvasContext2D*)js_mallocz(ctx, sizeof(JSCanvasContext2D));
-    c2d->canvasId = id;
-    JS_SetOpaque(ctxObj, c2d);
-    // Attach methods
+    auto *c2d = (JSCanvasContext2D*)js_mallocz(ctx, sizeof(JSCanvasContext2D)); c2d->canvasId = id; JS_SetOpaque(ctxObj, c2d);
     JS_SetPropertyStr(ctx, ctxObj, "fillRect", JS_NewCFunction(ctx, js_ctx_fillRect, "fillRect", 5));
     JS_SetPropertyStr(ctx, ctxObj, "fillCircle", JS_NewCFunction(ctx, js_ctx_fillCircle, "fillCircle", 4));
     return ctxObj;
@@ -381,7 +379,7 @@ static const MethodDesc kMethods[] = {
     {"removeAttribute", js_removeAttribute, 1},
     {"addEventListener", js_addEventListener, 2},
     {"removeEventListener", js_removeEventListener, 2},
-    {"getCanvasRenderingContext", js_element_getCanvasRenderingContext, 0},
+    {"getContext", js_element_getContext, 1},
 };
 
 } // namespace

@@ -9,9 +9,9 @@ function ShapeCell({ index }) {
   const top  = Math.floor(Math.random()*(600-size));
   useLayoutEffect(() => {
     const el = ref.current; if(!el) return;
-    const ctx = el.getCanvasRenderingContext(); if(!ctx) return;
+    const ctx = el.getContext && el.getContext('2d'); if(!ctx) return;
     const rand8 = () => Math.floor(Math.random()*256) & 0xFF;
-    for (let i=0;i<100;i++) {
+    for (let i=0;i<8;i++) {
       const r=rand8(), g=rand8(), b=rand8();
       const color = ((r<<24)|(g<<16)|(b<<8)|0xFF)>>>0;
       const maxR = Math.min(size,size)/2;
@@ -35,12 +35,12 @@ function ShapeCell({ index }) {
     el.addEventListener('mouseup', onUp);
   }, []);
   const style=`position:absolute; left:${left}px; top:${top}px; width:${size}px; height:${size}px; background:transparent; border:1px solid #fff;`;
-  return htm`<div ref=${ref} style=${style}></div>`;
+  return htm`<canvas ref=${ref} style=${style}></canvas>`;
 }
 
 function App(){
-  const cells = Array.from({length:16}, (_,i)=> htm`<${ShapeCell} key=${i} index=${i} />`);
-  return htm`<div style="position:relative; width:800px; height:600px;">${cells}</div>`;
+  const cells = Array.from({length:4}, (_,i)=> htm`<${ShapeCell} key=${i} index=${i} />`);
+  return htm`<canvas style="position:relative; width:800px; height:600px; display:block;">${cells}</canvas>`;
 }
 
 render(htm`<${App} />`, document.body);
