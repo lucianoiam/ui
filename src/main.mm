@@ -22,6 +22,8 @@
 #include <include/core/SkCanvas.h>
 #include <include/core/SkSurface.h>
 #include <random>
+#include "layout/layout_yoga.h"
+#include "viewport.h" // default viewport size
 
 // Forward declare dump_exception for use in mouse event forwarding
 static void dump_exception(JSContext *ctx);
@@ -116,33 +118,40 @@ static JSValue g_deferred_body = JS_UNDEFINED;
 static void perform_composite_and_present(NSImageView* iv, sk_sp<SkSurface> surface, int W, int H, NSWindow* window);
 static NSImageView* g_canvasImageView = nil;
 static sk_sp<SkSurface> g_windowSurface;
-static int g_winW=800, g_winH=600;
+int g_winW=VIEWPORT_DEFAULT_WIDTH, g_winH=VIEWPORT_DEFAULT_HEIGHT; // single initialization point
 
 static void composite_into_surface(sk_sp<SkSurface> surface, int W, int H) {
     if (!surface) return;
+    // Make sure layout applied just-in-time (in case no explicit requestComposite call)
+    if (g_deferred_ctx) layout_maybe_run(g_deferred_ctx);
     SkCanvas* canvas = surface->getCanvas();
     canvas->clear(SkColorSetARGB(255,0x20,0x20,0x20));
     extern bool gfx_get_size(int id, int* w, int* h);
     extern sk_sp<SkImage> gfx_snapshot(int id);
     extern int dom_element_canvas_id(dom::Element* el, bool createIfMissing);
     renderer_for_each_layer([&](RenderLayer* rl){
+        if (!rl || !rl->element) return;
         int id = dom_element_canvas_id(rl->element, false);
-        if (!id) return;
-        int x=0,y=0;
-        if (rl->element) {
-            auto it = rl->element->attributes.find("style");
-            if (it != rl->element->attributes.end()) {
-                const std::string& s = it->second;
-                auto findInt=[&](const char* key){ size_t p=s.find(key); if(p!=std::string::npos){ size_t c=s.find(':',p); size_t sc=s.find(';',c); if(c!=std::string::npos){ std::string num=s.substr(c+1, sc==std::string::npos?std::string::npos:sc-(c+1)); try { return std::stoi(num); } catch(...){} } } return -1; };
-                int lx=findInt("left"); if(lx>=0) x=lx; int ty=findInt("top"); if(ty>=0) y=ty;
-            }
+        int x=0,y=0,w=0,h=0;
+        if (!layout_get_box(rl->element, x,y,w,h)) {
+            // fallback if layout omitted this element
+            w = 50; h = 50;
         }
-        int w=0,h=0; if(!gfx_get_size(id,&w,&h)){ w=h=64; }
-        auto img = gfx_snapshot(id);
-        if (img) {
-            canvas->drawImage(img.get(), (SkScalar)x, (SkScalar)y);
-            SkPaint border; border.setStyle(SkPaint::kStroke_Style); border.setColor(SK_ColorWHITE); border.setStrokeWidth(1);
-            canvas->drawRect(SkRect::MakeXYWH(x,y,w,h), border);
+        // Draw background color if present even without canvas surface
+        const std::string& st = rl->element->styleCssText;
+        auto trim=[&](std::string s){ size_t a=s.find_first_not_of(" \t"); size_t b=s.find_last_not_of(" \t"); if(a==std::string::npos) return std::string(); return s.substr(a,b-a+1);};
+        auto parseRgb=[&](const std::string& val){ int r=0,gc=0,b=0; if (sscanf(val.c_str(), "rgb(%d,%d,%d)", &r,&gc,&b)==3) { return SkColorSetARGB(255,(uint8_t)r,(uint8_t)gc,(uint8_t)b);} return (SkColor)0; };
+        SkColor bg=0;
+        // background-color:
+        size_t bcp = st.find("background-color:");
+        if (bcp!=std::string::npos){ size_t vs=bcp+17; size_t sc=st.find(';',vs); std::string val=trim(st.substr(vs, sc==std::string::npos?std::string::npos:sc-vs)); bg=parseRgb(val); }
+        if (!bg){ size_t bp=st.find("background:"); if(bp!=std::string::npos){ size_t vs=bp+11; size_t sc=st.find(';',vs); std::string val=trim(st.substr(vs, sc==std::string::npos?std::string::npos:sc-vs)); bg=parseRgb(val);} }
+        if (bg){ SkPaint p; p.setStyle(SkPaint::kFill_Style); p.setColor(bg); canvas->drawRect(SkRect::MakeXYWH(x,y,w,h), p); }
+        if (id) {
+            auto img = gfx_snapshot(id);
+            if (img) {
+                canvas->drawImage(img.get(), (SkScalar)x, (SkScalar)y);
+                if (getenv("DEBUG_DRAW_BORDER")) { SkPaint border; border.setStyle(SkPaint::kStroke_Style); border.setColor(SK_ColorWHITE); border.setStrokeWidth(1); canvas->drawRect(SkRect::MakeXYWH(x,y,w,h), border);} }
         }
     });
 }
@@ -165,10 +174,22 @@ static void present_surface(NSImageView* iv, sk_sp<SkSurface> surface, int W, in
 
 static JSValue js_requestComposite(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     if (g_windowSurface) {
+    // Run internal layout pass before painting (JS unaware)
+    layout_maybe_run(ctx);
         composite_into_surface(g_windowSurface, g_winW, g_winH);
         present_surface(g_canvasImageView, g_windowSurface, g_winW, g_winH);
     }
     return JS_UNDEFINED;
+}
+
+
+// Internal native composite trigger used by layout auto-pass
+void native_request_composite(JSContext* ctx) {
+    (void)ctx;
+    if (g_windowSurface) {
+        composite_into_surface(g_windowSurface, g_winW, g_winH);
+        present_surface(g_canvasImageView, g_windowSurface, g_winW, g_winH);
+    }
 }
 
 // Minimal native->JS mouse event bridge (no architecture): calls global onNativeMouseEvent(evt)
@@ -417,7 +438,8 @@ int main(int argc, char **argv) {
         } else if (testId == 3) {
             #ifdef ENABLE_TEST_3
             run_preact_test(
-                "src/tests/render.js",
+                // "src/tests/render.js", // disabled in favor of layout.js
+                "src/tests/layout.js",
                 "output/render.html",
                 "build/preact.js",
                 "build/preact_hooks.js",
@@ -465,7 +487,8 @@ int main(int argc, char **argv) {
     if (stress_loops == 0 && (which == 0 || which == 3)) {
         #ifdef ENABLE_TEST_3
         run_preact_test(
-            "src/tests/render.js",
+            // "src/tests/render.js", // disabled in favor of layout.js
+            "src/tests/layout.js",
             "output/render.html",
             "build/preact.js",
             "build/preact_hooks.js",
@@ -486,12 +509,12 @@ int main(int argc, char **argv) {
             abort();
         }
     }
-    // After running tests, open a simple 800x600 window and draw each layer as a random 64x64 colored square
+    // After running tests, open a simple window (default viewport size) and render layers
     @autoreleasepool {
         NSApplication *app = [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
         static id appDel = nil; if (!appDel) appDel = [NSObject new];
-        NSRect frame = NSMakeRect(0, 0, 800, 600);
+    NSRect frame = NSMakeRect(0, 0, g_winW, g_winH);
         NSWindow *window = [[NSWindow alloc] initWithContentRect:frame
                                                        styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)
                                                          backing:NSBackingStoreBuffered
@@ -501,7 +524,7 @@ int main(int argc, char **argv) {
         [NSApp activateIgnoringOtherApps:YES];
 
         // Create an NSImageView backed by a bitmap we paint into via Skia (now storing globals for incremental recomposite)
-        g_winW = 800; g_winH = 600;
+    g_winW = VIEWPORT_DEFAULT_WIDTH; g_winH = VIEWPORT_DEFAULT_HEIGHT;
         SkImageInfo info = SkImageInfo::Make(g_winW, g_winH, kN32_SkColorType, kPremul_SkAlphaType);
         g_windowSurface = SkSurfaces::Raster(info);
     g_canvasImageView = (NSImageView*)[[InputImageView alloc] initWithFrame:frame];
@@ -512,16 +535,17 @@ int main(int argc, char **argv) {
         }
         // Expose requestComposite() to JS for drag updates
         if (g_deferred_ctx) {
-            JSValue global = JS_GetGlobalObject(g_deferred_ctx);
-            JS_SetPropertyStr(g_deferred_ctx, global, "requestComposite", JS_NewCFunction(g_deferred_ctx, js_requestComposite, "requestComposite", 0));
-            // Install native mouse event dispatcher bridging to addEventListener model
-                        const char* dispatchSrc = R"JS(
+                        JSValue global = JS_GetGlobalObject(g_deferred_ctx);
+                        JS_SetPropertyStr(g_deferred_ctx, global, "requestComposite", JS_NewCFunction(g_deferred_ctx, js_requestComposite, "requestComposite", 0));
+                        // Install native mouse event dispatcher; use dynamic viewport (single source: g_winW/g_winH)
+                        char viewportDecl[128];
+                        snprintf(viewportDecl, sizeof(viewportDecl), "globalThis.__viewport={w:%d,h:%d};\n", g_winW, g_winH);
+                        const char* dispatchBody = R"JS(
 if(!globalThis.__dispatchNativeMouseInstalled){
     globalThis.__dispatchNativeMouseInstalled=true;
     globalThis.__dispatchNativeMouse=function(ev){
         if(!ev||!ev.type)return; const t=ev.type; const x=ev.clientX|0; const y=ev.clientY|0;
-    // Simple hit test (canvas only, post-migration)
-    var target=null; var nodes=document.getElementsByTagName?Array.from(document.getElementsByTagName('canvas')):[];
+        var target=null; var nodes=document.getElementsByTagName?Array.from(document.getElementsByTagName('canvas')):[];
         for(var i=nodes.length-1;i>=0;i--){
             var n=nodes[i]; var st=n.getAttribute? (n.getAttribute('style')||''):'';
             var mW=st.match(/width:(\d+)/); var mH=st.match(/height:(\d+)/); var mL=st.match(/left:(\d+)/); var mT=st.match(/top:(\d+)/);
@@ -533,29 +557,23 @@ if(!globalThis.__dispatchNativeMouseInstalled){
             var st=target.getAttribute('style')||'';
             var mL=/left:(\d+)/.exec(st); var mT=/top:(\d+)/.exec(st);
             target.__draggingOffset=[x-(mL?+mL[1]:0), y-(mT?+mT[1]:0)];
-            // Bubble simple event through listener list
         }
         if(t==='mousemove' && target.__draggingOffset){
             var off=target.__draggingOffset; var st=target.getAttribute('style')||'';
             var mW=st.match(/width:(\d+)/); var mH=st.match(/height:(\d+)/); var w=mW?+mW[1]:64; var h=mH?+mH[1]:64;
-            var nx=Math.max(0,Math.min(800-w,x-off[0])); var ny=Math.max(0,Math.min(600-h,y-off[1]));
+            var nx=Math.max(0,Math.min(globalThis.__viewport.w-w,x-off[0]));
+            var ny=Math.max(0,Math.min(globalThis.__viewport.h-h,y-off[1]));
             target.setAttribute('style', st.replace(/left:\d+/, 'left:'+nx).replace(/top:\d+/, 'top:'+ny));
             if(typeof requestComposite==='function') requestComposite();
         }
-        if(t==='mouseup') {
-            if(target.__draggingOffset) delete target.__draggingOffset;
-        }
-        // Invoke registered listeners if present
+        if(t==='mouseup') { if(target.__draggingOffset) delete target.__draggingOffset; }
         var arr = target['__listeners_'+t];
-        if (Array.isArray(arr)) {
-            for (var i=0;i<arr.length;i++) {
-                try { arr[i].call(target, ev); } catch(e) {}
-            }
-        }
+        if (Array.isArray(arr)) { for (var i=0;i<arr.length;i++) { try { arr[i].call(target, ev); } catch(e) {} } }
     };
 }
 )JS";
-            JSValue r = JS_Eval(g_deferred_ctx, dispatchSrc, strlen(dispatchSrc), "<install_dispatch>", JS_EVAL_TYPE_GLOBAL);
+                        std::string dispatchSrc = std::string(viewportDecl) + dispatchBody;
+                        JSValue r = JS_Eval(g_deferred_ctx, dispatchSrc.c_str(), dispatchSrc.size(), "<install_dispatch>", JS_EVAL_TYPE_GLOBAL);
             if (JS_IsException(r)) dump_exception(g_deferred_ctx); JS_FreeValue(g_deferred_ctx, r);
             JS_FreeValue(g_deferred_ctx, global);
         }

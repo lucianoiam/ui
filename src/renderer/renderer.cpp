@@ -1,6 +1,8 @@
 #include "renderer.h"
 #include <cstdio>
 #include "scheduler.h"
+#include "wapis/dom.hpp"
+extern void layout_mark_dirty();
 
 namespace {
 static Renderer* g_renderer = nullptr;
@@ -22,34 +24,54 @@ RenderLayer* Renderer::ensureLayer(dom::Element* el) {
     auto rl = std::make_unique<RenderLayer>();
     rl->element = el;
     rl->dirtyStyle = rl->dirtyChildren = true;
+    rl->createOrder = nextCreateOrder_++;
     auto* ptr = rl.get();
     layers_[el] = std::move(rl);
+    orderDirty_ = true;
     return ptr;
 }
 
 void Renderer::onElementCreated(dom::Element* el) {
     ensureLayer(el); // allocate layer lazily
+    layout_mark_dirty();
 }
 void Renderer::onElementRemoved(dom::Element* el) {
     layers_.erase(el);
+    orderDirty_ = true;
+    layout_mark_dirty();
 }
 void Renderer::onAttributeChanged(dom::Element* el, const std::string& name, const std::string& oldValue, const std::string& newValue) {
     if (name == "style" && oldValue != newValue) {
         if (auto* rl = ensureLayer(el)) rl->dirtyStyle = true;
         scheduleFrame();
+        layout_mark_dirty();
     }
 }
 void Renderer::onChildListChanged(dom::Element* el) {
     if (auto* rl = ensureLayer(el)) { rl->dirtyChildren = true; scheduleFrame(); }
+    layout_mark_dirty();
+    orderDirty_ = true;
 }
 
 void Renderer::frame() {
-    // Unoptimized: iterate all layers and “repaint” dirty ones
-    for (auto &kv : layers_) {
-        RenderLayer* rl = kv.second.get();
+    // Rebuild ordering if dirty
+    if (orderDirty_) {
+        ordered_.clear(); ordered_.reserve(layers_.size());
+        for (auto &kv : layers_) ordered_.push_back(kv.second.get());
+        // Assign depth by walking parent chain (simple heuristic: distance to root)
+        for (auto *rl : ordered_) {
+            int d=0; auto *n = rl->element; while (n && n->parentNode.lock()) { d++; n = static_cast<dom::Element*>(n->parentNode.lock().get()); }
+            rl->depth = d;
+        }
+        std::sort(ordered_.begin(), ordered_.end(), [](RenderLayer* a, RenderLayer* b){
+            if (a->depth != b->depth) return a->depth < b->depth; // parents first
+            return a->createOrder < b->createOrder; // stable
+        });
+        orderDirty_ = false;
+    }
+    for (auto *rl : ordered_) {
         if (rl->dirtyStyle || rl->dirtyChildren) {
-            // Placeholder: future Skia paint calls.
-            std::fprintf(stderr, "[Renderer] repaint element=%p style=%d children=%d\n", (void*)rl->element, rl->dirtyStyle, rl->dirtyChildren);
+            std::fprintf(stderr, "[Renderer] repaint element=%p depth=%d style=%d children=%d\n", (void*)rl->element, rl->depth, rl->dirtyStyle, rl->dirtyChildren);
             rl->dirtyStyle = rl->dirtyChildren = false;
         }
     }
@@ -63,7 +85,18 @@ void Renderer::scheduleFrame() {
 }
 
 void Renderer::forEachLayer(const std::function<void(RenderLayer*)>& cb) {
-    for (auto &kv : layers_) cb(kv.second.get());
+    if (orderDirty_) { // ensure an order before iterating
+        ordered_.clear(); ordered_.reserve(layers_.size());
+        for (auto &kv : layers_) ordered_.push_back(kv.second.get());
+        for (auto *rl : ordered_) {
+            int d=0; auto *n = rl->element; while (n && n->parentNode.lock()) { d++; n = static_cast<dom::Element*>(n->parentNode.lock().get()); }
+            rl->depth = d;
+        }
+        std::sort(ordered_.begin(), ordered_.end(), [](RenderLayer* a, RenderLayer* b){
+            if (a->depth != b->depth) return a->depth < b->depth; return a->createOrder < b->createOrder; });
+        orderDirty_ = false;
+    }
+    for (auto *rl : ordered_) cb(rl);
 }
 
 void renderer_for_each_layer(const std::function<void(RenderLayer*)>& cb) {

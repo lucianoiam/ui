@@ -6,6 +6,7 @@
 #include "wapis/dom_adapter.h"
 #include "renderer/renderer.h"
 #include <include/core/SkSurface.h>
+#include "viewport.h"
 
 extern JSContext* g_deferred_ctx; // declared in main.mm
 extern JSValue g_deferred_global; // main.mm
@@ -46,7 +47,7 @@ extern NSImageView* g_canvasImageView; extern sk_sp<SkSurface> g_windowSurface; 
 
 - (NSPoint)translatePoint:(NSEvent*)event {
 	NSPoint p = [event locationInWindow];
-	return NSMakePoint(p.x, 600 - p.y); // invert y into our canvas space
+	return NSMakePoint(p.x, g_winH - p.y); // invert y using current viewport height
 }
 
 - (void)mouseDown:(NSEvent*)event {

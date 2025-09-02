@@ -1,6 +1,7 @@
 #pragma once
 #include "dom_observer.h"
 #include <unordered_map>
+#include <vector>
 #include <memory>
 #include <functional>
 
@@ -10,6 +11,8 @@ struct RenderLayer {
     dom::Element* element = nullptr; // non-owning
     bool dirtyStyle = true;
     bool dirtyChildren = true;
+    int depth = 0;
+    uint64_t createOrder = 0; // monotonic for stable ordering among siblings
 };
 
 class Renderer : public DomObserver {
@@ -28,7 +31,10 @@ public:
 
 private:
     RenderLayer* ensureLayer(dom::Element* el);
-    std::unordered_map<dom::Element*, std::unique_ptr<RenderLayer>> layers_;
+    std::unordered_map<dom::Element*, std::unique_ptr<RenderLayer>> layers_; // primary lookup
+    std::vector<RenderLayer*> ordered_; // cached ordered list
+    bool orderDirty_ = true;
+    uint64_t nextCreateOrder_ = 1;
     bool framePending_ = false;
 };
 

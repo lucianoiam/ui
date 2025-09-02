@@ -138,11 +138,13 @@ std::shared_ptr<Node> Node::previousSibling() const {
 }
 
 // --- Element ---
+void layout_mark_dirty(); // defined in layout/layout_yoga.cpp
 void Element::setAttribute(const std::string& name, const std::string& value) {
     attributes[name] = value;
     if (name == "style") {
         // Keep styleCssText mirror in sync
         const_cast<Element*>(this)->styleCssText = value;
+    layout_mark_dirty();
     }
 }
 

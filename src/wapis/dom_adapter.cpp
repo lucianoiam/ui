@@ -61,6 +61,9 @@ static std::shared_ptr<Node> get_cpp_node(JSContext* ctx, JSValueConst val) {
     return nullptr;
 }
 
+// Expose minimal accessor for internal subsystems (layout, etc.) without leaking other internals
+extern "C" void* dom_get_cpp_node_opaque(JSContext* ctx, JSValueConst v) { auto sp = get_cpp_node(ctx, v); return sp.get(); }
+
 static void js_dom_node_finalizer(JSRuntime* rt, JSValue val) {
     void* ptr = JS_GetOpaque(val, dom_node_class_id);
     if (ptr) {
