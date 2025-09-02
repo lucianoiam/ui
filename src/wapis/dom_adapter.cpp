@@ -10,6 +10,7 @@
 #include <vector>
 #include <cstdlib>
 #include <cstdio>
+#include <functional>
 
 using dom::Node;
 using dom::Element;
@@ -185,8 +186,57 @@ static JSValue js_set_textContent(JSContext* ctx, JSValueConst this_val, int arg
 static JSValue js_get_innerHTML(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) { auto n=get_cpp_node(ctx,this_val); if(!n || n->nodeType!=dom::NodeType::ELEMENT) return JS_UNDEFINED; auto s=std::static_pointer_cast<Element>(n)->innerHTML(); return JS_NewString(ctx, s.c_str()); }
 static JSValue js_set_innerHTML(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { if(argc<1) return JS_UNDEFINED; size_t len; const char* str=JS_ToCStringLen(ctx,&len,argv[0]); auto n=get_cpp_node(ctx,this_val); if(n && n->nodeType==dom::NodeType::ELEMENT && str) std::static_pointer_cast<Element>(n)->setInnerHTML(str); if(str) JS_FreeCString(ctx,str); return JS_UNDEFINED; }
 static JSValue js_get_outerHTML(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) { auto n=get_cpp_node(ctx,this_val); if(!n || n->nodeType!=dom::NodeType::ELEMENT) return JS_UNDEFINED; auto s=std::static_pointer_cast<Element>(n)->outerHTML(); return JS_NewString(ctx, s.c_str()); }
-static JSValue js_addEventListener(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { if(argc<2) return JS_UNDEFINED; const char* name=JS_ToCString(ctx, argv[0]); auto n=get_cpp_node(ctx,this_val); if(n && name) n->addEventListener(name); if(name) JS_FreeCString(ctx,name); return JS_UNDEFINED; }
-static JSValue js_removeEventListener(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { if(argc<2) return JS_UNDEFINED; const char* name=JS_ToCString(ctx, argv[0]); auto n=get_cpp_node(ctx,this_val); if(n && name) n->removeEventListener(name); if(name) JS_FreeCString(ctx,name); return JS_UNDEFINED; }
+static JSValue js_addEventListener(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc < 2) return JS_UNDEFINED;
+    const char* name = JS_ToCString(ctx, argv[0]);
+    if (!name) return JS_UNDEFINED;
+    auto n = get_cpp_node(ctx, this_val);
+    if (n) n->addEventListener(name);
+    if (JS_IsFunction(ctx, argv[1])) {
+        std::string prop = std::string("__listeners_") + name;
+        JSValue arr = JS_GetPropertyStr(ctx, this_val, prop.c_str());
+        if (!JS_IsArray(arr)) {
+            if (!JS_IsUndefined(arr)) JS_FreeValue(ctx, arr);
+            arr = JS_NewArray(ctx);
+            JS_SetPropertyStr(ctx, (JSValue)this_val, prop.c_str(), JS_DupValue(ctx, arr));
+        }
+        int64_t len64=0; JS_GetLength(ctx, arr, &len64); uint32_t len=(uint32_t)len64;
+        JS_SetPropertyUint32(ctx, arr, len, JS_DupValue(ctx, argv[1]));
+        JS_FreeValue(ctx, arr);
+    }
+    JS_FreeCString(ctx, name);
+    return JS_UNDEFINED;
+}
+static JSValue js_removeEventListener(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc < 2) return JS_UNDEFINED;
+    const char* name = JS_ToCString(ctx, argv[0]);
+    if (!name) return JS_UNDEFINED;
+    auto n = get_cpp_node(ctx, this_val);
+    if (n) n->removeEventListener(name);
+    if (JS_IsFunction(ctx, argv[1])) {
+        std::string prop = std::string("__listeners_") + name;
+        JSValue arr = JS_GetPropertyStr(ctx, this_val, prop.c_str());
+        if (JS_IsArray(arr)) {
+            int64_t len64=0; JS_GetLength(ctx, arr, &len64); uint32_t len=(uint32_t)len64;
+            for (uint32_t i=0;i<len;i++) {
+                JSValue fn = JS_GetPropertyUint32(ctx, arr, i);
+                bool match = JS_IsFunction(ctx, fn) && JS_IsFunction(ctx, argv[1]);
+                if (match) {
+                    for (uint32_t j=i+1;j<len;j++) {
+                        JSValue tmp = JS_GetPropertyUint32(ctx, arr, j);
+                        JS_SetPropertyUint32(ctx, arr, j-1, tmp);
+                    }
+                    JS_SetPropertyUint32(ctx, arr, len-1, JS_UNDEFINED);
+                    break;
+                }
+                JS_FreeValue(ctx, fn);
+            }
+        }
+        JS_FreeValue(ctx, arr);
+    }
+    JS_FreeCString(ctx, name);
+    return JS_UNDEFINED;
+}
 static JSValue js_setAttribute(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { if (argc < 2) return JS_UNDEFINED; auto node = get_cpp_node(ctx, this_val); if (!node || node->nodeType != dom::NodeType::ELEMENT) return JS_UNDEFINED; auto el = std::static_pointer_cast<Element>(node); const char* name = JS_ToCString(ctx, argv[0]); const char* value = JS_ToCString(ctx, argv[1]); el->setAttribute(name, value); JS_FreeCString(ctx, name); JS_FreeCString(ctx, value); return JS_UNDEFINED; }
 static JSValue js_setAttribute_with_notify(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     if (argc < 2) return JS_UNDEFINED;
@@ -211,6 +261,32 @@ static JSValue js_appendChild(JSContext* ctx, JSValueConst this_val, int argc, J
 static JSValue js_insertBefore(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { auto n = get_cpp_node(ctx, this_val); if (!n || argc < 2) return JS_UNDEFINED; auto nc = get_cpp_node(ctx, argv[0]); auto rc = get_cpp_node(ctx, argv[1]); if (!nc) return JS_UNDEFINED; n->insertBefore(nc, rc); if (n->nodeType == dom::NodeType::ELEMENT) dom_notify_childlist_changed(std::static_pointer_cast<Element>(n).get()); return JS_DupValue(ctx, argv[0]); }
 static JSValue js_removeChild(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { if (argc < 1) return JS_UNDEFINED; auto n = get_cpp_node(ctx, this_val); auto c = get_cpp_node(ctx, argv[0]); if (!n || !c) return JS_UNDEFINED; n->removeChild(c); if (n->nodeType == dom::NodeType::ELEMENT) dom_notify_childlist_changed(std::static_pointer_cast<Element>(n).get()); if (c->nodeType == dom::NodeType::ELEMENT) dom_notify_element_removed(std::static_pointer_cast<Element>(c).get()); return JS_DupValue(ctx, argv[0]); }
 static JSValue js_replaceChild(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { if (argc < 2) return JS_UNDEFINED; auto n = get_cpp_node(ctx, this_val); auto nc = get_cpp_node(ctx, argv[0]); auto oc = get_cpp_node(ctx, argv[1]); if (!n || !nc || !oc) return JS_UNDEFINED; n->replaceChild(nc, oc); if (n->nodeType == dom::NodeType::ELEMENT) dom_notify_childlist_changed(std::static_pointer_cast<Element>(n).get()); if (oc->nodeType == dom::NodeType::ELEMENT) dom_notify_element_removed(std::static_pointer_cast<Element>(oc).get()); if (nc->nodeType == dom::NodeType::ELEMENT) dom_notify_element_created(std::static_pointer_cast<Element>(nc).get()); return JS_DupValue(ctx, argv[1]); }
+// getElementsByTagName (simple recursive traversal implemented here rather than relying on C++ helper)
+static JSValue js_getElementsByTagName(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_NewArray(ctx);
+    const char* tag = JS_ToCString(ctx, argv[0]);
+    if (!tag) return JS_NewArray(ctx);
+    std::string wanted = tag; JS_FreeCString(ctx, tag);
+    auto root = get_cpp_node(ctx, this_val);
+    JSValue arr = JS_NewArray(ctx);
+    if (!root) return arr;
+    uint32_t idx = 0;
+    struct Walker {
+        JSContext* ctx; JSValue arr; uint32_t* pidx; const std::string* wanted;
+        void operator()(std::shared_ptr<Node> n) {
+            if (!n) return;
+            if (n->nodeType == dom::NodeType::ELEMENT) {
+                auto el = std::static_pointer_cast<Element>(n);
+                if (el->tagName == *wanted) {
+                    JS_SetPropertyUint32(ctx, arr, (*pidx)++, wrap_node_js(ctx, el));
+                }
+            }
+            for (auto &c : n->childNodes) (*this)(c);
+        }
+    } walker{ctx, arr, &idx, &wanted};
+    walker(root);
+    return arr;
+}
 
 // Descriptor tables (properties & methods) for prototype definition
 struct PropDesc { const char* name; JSCFunction* getter; JSCFunction* setter; };
@@ -299,6 +375,7 @@ static const MethodDesc kMethods[] = {
     {"insertBefore", js_insertBefore, 2},
     {"removeChild", js_removeChild, 1},
     {"replaceChild", js_replaceChild, 2},
+    {"getElementsByTagName", js_getElementsByTagName, 1},
     {"setAttribute", js_setAttribute_with_notify, 2},
     {"getAttribute", js_getAttribute, 1},
     {"removeAttribute", js_removeAttribute, 1},

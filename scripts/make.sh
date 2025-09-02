@@ -98,6 +98,8 @@ SOURCES=(
   "$SRC_DIR/wapis/dom_adapter.cpp"
   "$SRC_DIR/wapis/dom.cpp"
   "$SRC_DIR/wapis/whatwg.c"
+  "$SRC_DIR/input/input.cpp"
+  "$SRC_DIR/input/mac.mm"
 )
 
 LIBS=(
