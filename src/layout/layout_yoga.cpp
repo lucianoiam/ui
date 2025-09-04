@@ -10,6 +10,7 @@
 #include <functional>
 #include "wapis/dom_hooks.h"
 #include "render/attachments.h"
+#include "css/css_parser.h"
 
 
 // We hide direct access; adapter provides a helper we expose via a thin accessor.
@@ -23,10 +24,10 @@ namespace dom { void layout_mark_dirty() { ::layout_mark_dirty(); } }
 // Register DOM attribute hook (one-time) to mark layout dirty on style mutations
 struct LayoutDomHookInstaller {
     LayoutDomHookInstaller(){
-        dom::setAttributeHook(+[](dom::Element* el, const std::string& name, const std::string& value){ (void)value; if(name=="style"){ mark_style_dirty(el); layout_mark_dirty(); } });
+        dom::setAttributeHook(+[](dom::Element* el, const std::string& name, const std::string& value){ (void)value; if(name=="style"){ mark_style_dirty(el); } });
         dom::setMutationHook(+[](dom::Node* target, const char* op, dom::Node* related){
             // Any structural change marks layout dirty.
-            layout_mark_dirty();
+            if(target && target->nodeType==dom::NodeType::ELEMENT) mark_layout_dirty(static_cast<dom::Element*>(target));
             if(op && std::string(op)=="remove"){
                 // If an element subtree is being removed, free attachments recursively.
                 std::function<void(dom::Node*)> recurse=[&](dom::Node* n){ if(!n) return; if(n->nodeType==dom::NodeType::ELEMENT){ free_render_data(static_cast<dom::Element*>(n)); }
@@ -47,79 +48,12 @@ bool layout_get_box(dom::Element* el, int& x, int& y, int& w, int& h) {
 struct Box { float layoutX,layoutY,layoutW,layoutH; };
 // TempFlexStore removed (flex meta persisted in attachment)
 
-// --- Basic CSS token parsing helpers (very crude; will replace with Lexbor later) ---
-static YGFlexDirection parse_flex_direction(const std::string& css) {
-    if (css.find("flex-direction:row-reverse") != std::string::npos) return YGFlexDirectionRowReverse;
-    if (css.find("flex-direction:row") != std::string::npos) return YGFlexDirectionRow;
-    if (css.find("flex-direction:column-reverse") != std::string::npos) return YGFlexDirectionColumnReverse;
-    return YGFlexDirectionColumn; // default
-}
-static float parse_number_decl(const std::string& css, const char* key) {
-    size_t p = css.find(key);
-    if (p == std::string::npos) return -1.f;
-    size_t c = css.find(':', p); if (c == std::string::npos) return -1.f;
-    size_t sc = css.find(';', c+1);
-    std::string num = css.substr(c+1, sc==std::string::npos? std::string::npos : sc-(c+1));
-    // strip trailing px if present
-    if (num.size() > 2 && num.find("px") != std::string::npos) {
-        size_t px = num.find("px"); num = num.substr(0, px);
-    }
-    try { return std::stof(num); } catch(...) { return -1.f; }
-}
-static float parse_flex(const std::string& css) { return parse_number_decl(css, "flex"); }
-static float parse_px(const std::string& css, const char* key) { return parse_number_decl(css, key); }
-
-struct ParsedDecls { std::unordered_map<std::string,std::string> kv; };
-
-static ParsedDecls parse_inline_css_lexbor(const std::string& css) {
-    ParsedDecls out; if (css.empty()) return out;
-    // Use Lexbor CSS tokenizer to walk tokens and reconstruct simple name:value; pairs per declaration.
-    lxb_css_syntax_tokenizer_t *tkz = lxb_css_syntax_tokenizer_create();
-    if (!tkz) return out;
-    if (lxb_css_syntax_tokenizer_init(tkz) != LXB_STATUS_OK) { lxb_css_syntax_tokenizer_destroy(tkz); return out; }
-    lxb_css_syntax_tokenizer_buffer_set(tkz, (const lxb_char_t*)css.data(), css.size());
-    std::string currentName; std::string currentValue; bool inName=true; bool seenColon=false;
-    auto flushDecl=[&](){ if(!currentName.empty() && !currentValue.empty()) { // trim
-            auto trim=[](std::string s){ size_t a=s.find_first_not_of(" \t\n\r"); size_t b=s.find_last_not_of(" \t\n\r"); if(a==std::string::npos) return std::string(); return s.substr(a,b-a+1);};
-            std::string n=trim(currentName); std::string v=trim(currentValue);
-            if(!n.empty() && !v.empty()) out.kv[n]=v; }
-        currentName.clear(); currentValue.clear(); inName=true; seenColon=false; };
-    while (true) {
-        lxb_css_syntax_token_t* tok = lxb_css_syntax_token(tkz);
-        if (!tok) break;
-        if (tok->type == LXB_CSS_SYNTAX_TOKEN__EOF) { flushDecl(); break; }
-        switch(tok->type) {
-            case LXB_CSS_SYNTAX_TOKEN_SEMICOLON:
-                flushDecl();
-                break;
-            case LXB_CSS_SYNTAX_TOKEN_COLON:
-                inName=false; seenColon=true; break;
-            case LXB_CSS_SYNTAX_TOKEN_WHITESPACE:
-                // preserve single space in value if already has content
-                if (!inName && seenColon && !currentValue.empty() && currentValue.back()!=' ') currentValue.push_back(' ');
-                break;
-            default: {
-                // Extract token text
-                const char* data = (const char*)tok->types.base.begin;
-                size_t len = tok->types.base.length;
-                if (len) {
-                    if (inName) currentName.append(data, len);
-                    else if (seenColon) currentValue.append(data, len);
-                }
-            } break;
-        }
-        lxb_css_syntax_token_consume(tkz);
-    }
-    lxb_css_syntax_tokenizer_destroy(tkz);
-    return out;
-}
-
 // Ensure style parsed & cached in attachment; apply style to Yoga node; store flex meta back into attachment
 static void apply_node_style(dom::Element* el, YGNodeRef node) {
     if(!el) return; auto* rd = ensure_render_data(el); if(!rd) return;
     if (rd->dirtyFlags & 1) { // style dirty
         rd->parsedStyle.clear();
-        auto pd = parse_inline_css_lexbor(el->styleCssText);
+        auto pd = css::parse_inline(el->styleCssText);
         rd->parsedStyle = pd.kv;
         rd->dirtyFlags &= ~1u; // clear style dirty
     }
@@ -140,7 +74,7 @@ static void apply_node_style(dom::Element* el, YGNodeRef node) {
             fprintf(stderr, "[layout][warn] flex-direction specified without display:flex (parsed display='%s') raw='%s'\n", display.c_str(), el->styleCssText.c_str());
         }
     } else {
-        YGNodeStyleSetFlexDirection(node, parse_flex_direction(el->styleCssText));
+        YGNodeStyleSetFlexDirection(node, YGFlexDirectionColumn); // default
     }
     if (std::getenv("LAYOUT_DEBUG") && display == "flex") {
         YGFlexDirection dir = YGNodeStyleGetFlexDirection(node);
@@ -149,20 +83,15 @@ static void apply_node_style(dom::Element* el, YGNodeRef node) {
     }
     std::string flexv = find("flex");
     if (!flexv.empty()) {
-        std::vector<std::string> parts; size_t start=0; while(start<flexv.size()) { while(start<flexv.size() && isspace((unsigned char)flexv[start])) start++; if(start>=flexv.size()) break; size_t end=start; while(end<flexv.size() && !isspace((unsigned char)flexv[end])) end++; parts.push_back(flexv.substr(start,end-start)); start=end; }
-        auto isNumber=[&](const std::string& s){ char* e=nullptr; std::strtof(s.c_str(), &e); return e && *e=='\0'; };
-        float grow=0.f, shrink=1.f; enum BasisType { BASIS_AUTO, BASIS_POINT, BASIS_PERCENT, BASIS_NONE }; BasisType basisType=BASIS_NONE; float basisValue=0.f; bool haveGrow=false, haveShrink=false;
-        if (parts.size()==1 && isNumber(parts[0])) { grow=std::max(0.f, std::strtof(parts[0].c_str(), nullptr)); haveGrow=true; basisType=BASIS_AUTO; }
-        else {
-            size_t idx=0; if(idx<parts.size() && isNumber(parts[idx])) { grow=std::strtof(parts[idx].c_str(),nullptr); haveGrow=true; idx++; }
-            if(idx<parts.size() && isNumber(parts[idx])) { shrink=std::strtof(parts[idx].c_str(),nullptr); haveShrink=true; idx++; }
-            if(idx<parts.size()) { std::string b=parts[idx]; if(b=="auto") basisType=BASIS_AUTO; else if(!b.empty() && b.back()=='%') { basisType=BASIS_PERCENT; basisValue=std::strtof(b.c_str(),nullptr);} else if(b.find("px")!=std::string::npos || isNumber(b)) { basisType=BASIS_POINT; basisValue=std::strtof(b.c_str(),nullptr);} }
-        }
-        if(haveGrow) YGNodeStyleSetFlexGrow(node,grow); if(haveShrink) YGNodeStyleSetFlexShrink(node,shrink);
-        if(basisType==BASIS_PERCENT) YGNodeStyleSetFlexBasisPercent(node,basisValue); else if(basisType==BASIS_POINT) YGNodeStyleSetFlexBasis(node,basisValue); else if(basisType==BASIS_AUTO) YGNodeStyleSetFlexBasisAuto(node);
+        css::FlexShorthand fp = css::parse_flex(flexv);
+        if(fp.haveGrow) YGNodeStyleSetFlexGrow(node, fp.grow);
+        if(fp.haveShrink) YGNodeStyleSetFlexShrink(node, fp.shrink);
+        if(fp.basisPercent) YGNodeStyleSetFlexBasisPercent(node, fp.basisValue);
+        else if(fp.basisPoint) YGNodeStyleSetFlexBasis(node, fp.basisValue);
+        else if(fp.basisAuto) YGNodeStyleSetFlexBasisAuto(node);
     }
-    auto parsePx=[&](std::string v)->float{ auto tv=v; size_t px=tv.find("px"); if(px!=std::string::npos) tv.erase(px); try { return std::stof(tv); } catch(...) { return -1.f; } };
-    auto widthv=find("width"); if(!widthv.empty()) { float f=parsePx(widthv); if(f>=0) YGNodeStyleSetWidth(node,f);} auto heightv=find("height"); if(!heightv.empty()) { float f=parsePx(heightv); if(f>=0) YGNodeStyleSetHeight(node,f);} 
+    auto widthv=find("width"); if(!widthv.empty()) { float num; std::string unit; if(css::parse_number_unit(widthv,num,unit) && (unit=="px" || unit.empty())) { if(num>=0) YGNodeStyleSetWidth(node,num); } }
+    auto heightv=find("height"); if(!heightv.empty()) { float num; std::string unit; if(css::parse_number_unit(heightv,num,unit) && (unit=="px" || unit.empty())) { if(num>=0) YGNodeStyleSetHeight(node,num); } }
     rd->isFlex=(display=="flex"); rd->flexGrow=YGNodeStyleGetFlexGrow(node); rd->flexShrink=YGNodeStyleGetFlexShrink(node);
     YGValue basis=YGNodeStyleGetFlexBasis(node);
     rd->flexBasisPercent = (basis.unit==YGUnitPercent);
@@ -175,12 +104,14 @@ static YGNodeRef ensure_yoga_node(dom::Element* el){ auto* rd=ensure_render_data
 
 static void sync_subtree(dom::Element* el){
     if(!el) return; YGNodeRef node = ensure_yoga_node(el); if(!node) return; auto* rd=get_render_data(el);
-    if(rd && (rd->dirtyFlags & 1)) apply_node_style(el,node); // update style if dirty
-    // Rebuild children each pass (O(n^2) worst-case; optimize later with diff)
-    uint32_t existing = YGNodeGetChildCount(node);
-    for(int i=(int)existing-1;i>=0;--i){ YGNodeRef ch = YGNodeGetChild(node,(uint32_t)i); YGNodeRemoveChild(node,ch); }
-    for(auto &c : el->childNodes){ if(c && c->nodeType==dom::NodeType::ELEMENT){ auto* ce=static_cast<dom::Element*>(c.get()); YGNodeRef cn = ensure_yoga_node(ce); YGNodeInsertChild(node, cn, YGNodeGetChildCount(node)); }}
-    for(auto &c : el->childNodes) if(c && c->nodeType==dom::NodeType::ELEMENT) sync_subtree(static_cast<dom::Element*>(c.get()));
+    if(rd && (rd->dirtyFlags & 1)) apply_node_style(el,node); // style update
+    std::vector<dom::Element*> desired; desired.reserve(el->childNodes.size());
+    for(auto &c: el->childNodes) if(c && c->nodeType==dom::NodeType::ELEMENT) desired.push_back(static_cast<dom::Element*>(c.get()));
+    bool mismatch=false; uint32_t existing = YGNodeGetChildCount(node); uint32_t common=std::min<uint32_t>(existing, desired.size());
+    for(uint32_t i=0;i<common && !mismatch;i++){ if(YGNodeGetChild(node,i)!=(YGNodeRef)ensure_yoga_node(desired[i])) mismatch=true; }
+    if(existing != desired.size()) mismatch=true;
+    if(mismatch){ for(int i=(int)existing-1;i>=0;--i){ YGNodeRemoveChild(node,YGNodeGetChild(node,(uint32_t)i)); } for(auto* ce:desired){ YGNodeInsertChild(node, ensure_yoga_node(ce), YGNodeGetChildCount(node)); } }
+    for(auto* ce: desired) sync_subtree(ce);
 }
 
 static void apply_layout_recursive(dom::Element* el, YGNodeRef node, float accL=0, float accT=0) {
@@ -209,8 +140,8 @@ void layout_maybe_run(JSContext* ctx) {
     static bool in_layout = false;
     if (in_layout) return; // avoid reentrant invocation
     in_layout = true;
-    // Inefficient mode: always recompute layout each call (ignore dirty flag)
-    g_layout_dirty = false; // maintain contract but not relied upon
+    if(!g_layout_dirty) { in_layout=false; return; }
+    g_layout_dirty = false;
     // flex meta now persisted in attachments, nothing transient to clear
     // Get body element
     JSValue global = JS_GetGlobalObject(ctx);
@@ -236,6 +167,7 @@ void layout_maybe_run(JSContext* ctx) {
     YGNodeCalculateLayout(root, YGUndefined, YGUndefined, YGDirectionLTR);
     // Apply to layoutRootEl and descendants (single pass). Root is at (0,0).
     apply_layout_recursive(layoutRootEl, root, 0, 0);
+    for_each_render_data([](dom::Element* e, DomElementRenderData* rd){ (void)e; if(rd) rd->dirtyFlags &= ~2u; });
     // If layout root isn't body, set body box to viewport for compositor fallback
     if (layoutRootEl != bodyEl) { extern int g_winW; extern int g_winH; if(auto* rd=ensure_render_data(bodyEl)){ rd->layoutX=0; rd->layoutY=0; rd->layoutW=g_winW; rd->layoutH=g_winH; } }
     // Persist Yoga nodes; no freeing here

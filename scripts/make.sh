@@ -99,6 +99,7 @@ SOURCES=(
   "$SRC_DIR/wapis/dom.cpp"
   "$SRC_DIR/wapis/dom_hooks.cpp"
   "$SRC_DIR/layout/layout_yoga.cpp"
+  "$SRC_DIR/css/css_parser.cpp"
   "$SRC_DIR/render/attachments.cpp"
   "$SRC_DIR/wapis/whatwg.c"
   "$SRC_DIR/input/input.cpp"

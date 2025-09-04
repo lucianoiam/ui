@@ -30,5 +30,7 @@ void release_all_render_data(){
     for(auto &kv : g_renderData){ if(kv.second->yogaNode){ YGNodeRef n=(YGNodeRef)kv.second->yogaNode; YGNodeFreeRecursive(n); kv.second->yogaNode=nullptr; } }
     g_renderData.clear();
 }
-void mark_style_dirty(dom::Element* el){ if(auto* rd=ensure_render_data(el)) { rd->dirtyFlags |= 1; rd->styleVersion++; } }
+extern void layout_mark_dirty();
+void mark_style_dirty(dom::Element* el){ if(auto* rd=ensure_render_data(el)) { rd->dirtyFlags |= 1; rd->dirtyFlags |= 2; rd->styleVersion++; layout_mark_dirty(); } }
+void mark_layout_dirty(dom::Element* el){ if(auto* rd=ensure_render_data(el)) { rd->dirtyFlags |= 2; layout_mark_dirty(); } }
 void for_each_render_data(const std::function<void(dom::Element*, DomElementRenderData*)>& fn){ for(auto &kv : g_renderData) fn(kv.first, kv.second.get()); }
