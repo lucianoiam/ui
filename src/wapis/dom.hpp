@@ -62,6 +62,9 @@ public:
     // Simple style store (cssText only for now)
     std::string styleCssText;
 
+    // Optional per-node attachment for rendering/layout/state without bloating base Element.
+    void* data = nullptr; // opaque engine attachment (allocated/freed by engine subsystems)
+
     // --- Element methods ---
     void setAttribute(const std::string& name, const std::string& value);
     std::string getAttribute(const std::string& name) const;
@@ -82,6 +85,7 @@ public:
     void setStyleCssText(const std::string& v) { // NON-STANDARD convenience; syncs style attribute
         styleCssText = v;
         attributes["style"] = v;
+    // Opaque: engine layer may hook style changes; DOM stays generic.
     }
 #endif
     std::string serializeOpenTag() const; // INTERNAL NON-STANDARD helper

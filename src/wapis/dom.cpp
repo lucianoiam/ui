@@ -1,5 +1,6 @@
 // dom.cpp - C++ DOM implementation (W3C/WHATWG-inspired)
 #include "dom.hpp"
+#include "dom_hooks.h" // include outside namespace to prevent dom::dom
 #include <algorithm>
 #include <atomic>
 
@@ -137,15 +138,14 @@ std::shared_ptr<Node> Node::previousSibling() const {
     return nullptr;
 }
 
-// --- Element ---
-void layout_mark_dirty(); // defined in layout/layout_yoga.cpp
+// --- Element --- (kept generic; layout integration via hook)
 void Element::setAttribute(const std::string& name, const std::string& value) {
     attributes[name] = value;
     if (name == "style") {
-        // Keep styleCssText mirror in sync
+        // Keep styleCssText mirror in sync (generic mirror; engine may ignore)
         const_cast<Element*>(this)->styleCssText = value;
-    layout_mark_dirty();
     }
+    if (auto hook = getAttributeHook()) hook(this, name, value);
 }
 
 std::string Element::getAttribute(const std::string& name) const {

@@ -97,6 +97,7 @@ SOURCES=(
   "$SRC_DIR/renderer/scheduler.cpp"
   "$SRC_DIR/wapis/dom_adapter.cpp"
   "$SRC_DIR/wapis/dom.cpp"
+  "$SRC_DIR/wapis/dom_hooks.cpp"
   "$SRC_DIR/layout/layout_yoga.cpp"
   "$SRC_DIR/wapis/whatwg.c"
   "$SRC_DIR/input/input.cpp"

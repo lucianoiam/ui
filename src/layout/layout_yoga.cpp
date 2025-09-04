@@ -8,6 +8,7 @@
 #include <memory>
 #include <lexbor/css/syntax/tokenizer.h>
 #include <functional>
+#include "wapis/dom_hooks.h"
 
 // We hide direct access; adapter provides a helper we expose via a thin accessor.
 // Declare accessor (implemented in dom_adapter.cpp via a small addition) that returns C++ node for a JS value.
@@ -16,6 +17,14 @@ extern "C" void* dom_get_cpp_node_opaque(JSContext* ctx, JSValueConst v);
 static bool g_layout_dirty = true;
 void layout_mark_dirty() { g_layout_dirty = true; }
 namespace dom { void layout_mark_dirty() { ::layout_mark_dirty(); } }
+
+// Register DOM attribute hook (one-time) to mark layout dirty on style mutations
+struct LayoutDomHookInstaller {
+    LayoutDomHookInstaller(){
+        dom::setAttributeHook(+[](dom::Element* el, const std::string& name, const std::string& value){ (void)el; (void)value; if(name=="style") layout_mark_dirty(); });
+    }
+};
+static LayoutDomHookInstaller g_layout_hook_installer;
 
 struct Box { float l=0,t=0,w=0,h=0; };
 static std::unordered_map<dom::Element*, Box> g_boxes; // cleared each layout run
