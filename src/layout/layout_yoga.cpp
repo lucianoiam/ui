@@ -24,6 +24,17 @@ namespace dom { void layout_mark_dirty() { ::layout_mark_dirty(); } }
 struct LayoutDomHookInstaller {
     LayoutDomHookInstaller(){
         dom::setAttributeHook(+[](dom::Element* el, const std::string& name, const std::string& value){ (void)value; if(name=="style"){ mark_style_dirty(el); layout_mark_dirty(); } });
+        dom::setMutationHook(+[](dom::Node* target, const char* op, dom::Node* related){
+            // Any structural change marks layout dirty.
+            layout_mark_dirty();
+            if(op && std::string(op)=="remove"){
+                // If an element subtree is being removed, free attachments recursively.
+                std::function<void(dom::Node*)> recurse=[&](dom::Node* n){ if(!n) return; if(n->nodeType==dom::NodeType::ELEMENT){ free_render_data(static_cast<dom::Element*>(n)); }
+                    for(auto &c : n->childNodes){ if(c) recurse(c.get()); }
+                };
+                if(related) recurse(related);
+            }
+        });
     }
 };
 static LayoutDomHookInstaller g_layout_hook_installer;

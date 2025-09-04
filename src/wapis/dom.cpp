@@ -13,6 +13,7 @@ std::shared_ptr<Node> Node::appendChild(std::shared_ptr<Node> child) {
     if (!child) return nullptr;
     child->parentNode = shared_from_this();
     childNodes.push_back(child);
+    if(auto hook = getMutationHook()) hook(this, "append", child.get());
     return child;
 }
 
@@ -22,12 +23,14 @@ std::shared_ptr<Node> Node::insertBefore(std::shared_ptr<Node> newChild, std::sh
     if (it == childNodes.end()) return appendChild(newChild);
     newChild->parentNode = shared_from_this();
     childNodes.insert(it, newChild);
+    if(auto hook = getMutationHook()) hook(this, "insert", newChild.get());
     return newChild;
 }
 
 std::shared_ptr<Node> Node::removeChild(std::shared_ptr<Node> child) {
     auto it = std::find(childNodes.begin(), childNodes.end(), child);
     if (it != childNodes.end()) {
+        if(auto hook = getMutationHook()) hook(this, "remove", child.get());
         (*it)->parentNode.reset();
         childNodes.erase(it);
         return child;
@@ -38,6 +41,7 @@ std::shared_ptr<Node> Node::removeChild(std::shared_ptr<Node> child) {
 std::shared_ptr<Node> Node::replaceChild(std::shared_ptr<Node> newChild, std::shared_ptr<Node> oldChild) {
     auto it = std::find(childNodes.begin(), childNodes.end(), oldChild);
     if (it != childNodes.end()) {
+        if(auto hook = getMutationHook()) hook(this, "replace", oldChild.get());
         newChild->parentNode = shared_from_this();
         (*it)->parentNode.reset();
         *it = newChild;
