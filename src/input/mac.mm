@@ -55,10 +55,10 @@ extern int g_winH;
   JS_FreeValue(g_deferred_ctx, global);
 }
 
-- (NSPoint)translatePoint:(NSEvent *)event {
+ - (NSPoint)translatePoint:(NSEvent *)event {
+  // Convert Cocoa (bottom-left origin) window point to top-left origin used by style 'top'.
   NSPoint p = [event locationInWindow];
-  return NSMakePoint(p.x,
-                     g_winH - p.y); // invert y using current viewport height
+  return NSMakePoint(p.x, g_winH - p.y);
 }
 
 - (void)mouseDown:(NSEvent *)event {

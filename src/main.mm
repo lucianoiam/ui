@@ -169,9 +169,102 @@ static void composite_into_surface(sk_sp<SkSurface> surface, int W, int H) {
     int id = dom_element_canvas_id(rl->element, false);
     int x = 0, y = 0, w = 0, h = 0;
     if (!layout_get_box(rl->element, x, y, w, h)) {
-      // fallback if layout omitted this element
-      w = 50;
-      h = 50;
+      // Fallback: if layout omitted this element (e.g. absolute positioned canvases)
+      // parse a few positioning declarations from styleCssText so interactive dragging
+      // (which rewrites left/top) becomes visible. TODO: route through centralized CSS parser.
+      const std::string &st_fallback = rl->element->styleCssText;
+      auto parseDeclInt = [&](const char *prop) {
+        size_t p = st_fallback.find(prop);
+        if (p == std::string::npos) {
+          return -1;
+        }
+        size_t c = st_fallback.find(':', p);
+        if (c == std::string::npos) {
+          return -1;
+        }
+        size_t sc = st_fallback.find(';', c);
+        std::string raw = st_fallback.substr(
+            c + 1, sc == std::string::npos ? std::string::npos : sc - (c + 1));
+        // strip whitespace
+        size_t a = raw.find_first_not_of(" \t");
+        size_t b = raw.find_last_not_of(" \t");
+        if (a == std::string::npos) {
+          return -1;
+        }
+        std::string num = raw.substr(a, b - a + 1);
+        // trim trailing "px" if present
+        if (num.size() > 2 && (num.compare(num.size() - 2, 2, "px") == 0)) {
+          num = num.substr(0, num.size() - 2);
+        }
+        try {
+          return std::stoi(num);
+        } catch (...) {
+          return -1;
+        }
+      };
+      int fx = parseDeclInt("left");
+      int fy = parseDeclInt("top");
+      int fw = parseDeclInt("width");
+      int fh = parseDeclInt("height");
+      if (fx >= 0) {
+        x = fx;
+      }
+      if (fy >= 0) {
+        y = fy;
+      }
+      if (fw > 0) {
+        w = fw;
+      }
+      if (fh > 0) {
+        h = fh;
+      }
+      if (w <= 0) {
+        w = 50;
+      }
+      if (h <= 0) {
+        h = 50;
+      }
+    }
+    // Override with absolute positioning if explicitly styled, even if layout provided a box.
+    const std::string &style_override = rl->element->styleCssText;
+    if (style_override.find("position:absolute") != std::string::npos ||
+        style_override.find("left:") != std::string::npos ||
+        style_override.find("top:") != std::string::npos) {
+      auto parseOne = [&](const char *prop) -> int {
+        size_t p = style_override.find(prop);
+        if (p == std::string::npos) {
+          return -1;
+        }
+        size_t c = style_override.find(':', p);
+        if (c == std::string::npos) {
+          return -1;
+        }
+        size_t sc = style_override.find(';', c);
+        std::string raw = style_override.substr(
+            c + 1, sc == std::string::npos ? std::string::npos : sc - (c + 1));
+        size_t a = raw.find_first_not_of(" \t");
+        size_t b = raw.find_last_not_of(" \t");
+        if (a == std::string::npos) {
+          return -1;
+        }
+        std::string num = raw.substr(a, b - a + 1);
+        if (num.size() > 2 && (num.compare(num.size() - 2, 2, "px") == 0)) {
+          num = num.substr(0, num.size() - 2);
+        }
+        try {
+          return std::stoi(num);
+        } catch (...) {
+          return -1;
+        }
+      };
+      int lx = parseOne("left");
+      int ty = parseOne("top");
+      if (lx >= 0) {
+        x = lx;
+      }
+      if (ty >= 0) {
+        y = ty;
+      }
     }
     // Draw background color if present even without canvas surface
     const std::string &st = rl->element->styleCssText;
@@ -578,8 +671,8 @@ int main(int argc, char **argv) {
     } else if (testId == 3) {
 #ifdef ENABLE_TEST_3
       run_preact_test(
-          // "src/tests/render.js", // disabled in favor of layout.js
-          "src/tests/layout.js", "output/render.html", "build/preact.js",
+          "src/tests/render.js",
+          "output/render.html", "build/preact.js",
           "build/preact_hooks.js", "[TEST 3 OUTPUT]",
           "[BENCHMARK] Preact app + DOM render test",
           true /* defer cleanup so DOM stays alive for live window */
@@ -616,8 +709,8 @@ int main(int argc, char **argv) {
   if (stress_loops == 0 && (which == 0 || which == 3)) {
 #ifdef ENABLE_TEST_3
     run_preact_test(
-        // "src/tests/render.js", // disabled in favor of layout.js
-        "src/tests/layout.js", "output/render.html", "build/preact.js",
+  "src/tests/render.js",
+  "output/render.html", "build/preact.js",
         "build/preact_hooks.js", "[TEST 3 OUTPUT]",
         "[BENCHMARK] Preact app + DOM render test", true);
 #endif
