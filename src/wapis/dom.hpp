@@ -1,110 +1,112 @@
 // dom.hpp - C++ DOM interface (W3C/WHATWG-inspired)
 #pragma once
-#include <string>
-#include <vector>
-#include <memory> // for std::enable_shared_from_this
-#include <unordered_map>
 #include <atomic>
+#include <memory> // for std::enable_shared_from_this
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace dom {
 
-enum class NodeType {
-    ELEMENT = 1,
-    TEXT = 3,
-    DOCUMENT = 9
-};
+enum class NodeType { ELEMENT = 1, TEXT = 3, DOCUMENT = 9 };
 
 class Node : public std::enable_shared_from_this<Node> {
 public:
-    NodeType nodeType;
-    std::string nodeName;
-    std::string nodeValue;
-    std::vector<std::shared_ptr<Node>> childNodes;
-    std::weak_ptr<Node> parentNode;
-    std::weak_ptr<Node> ownerDocument;
-    uint64_t debugId = 0; // monotonic id for debugging
+  NodeType nodeType;
+  std::string nodeName;
+  std::string nodeValue;
+  std::vector<std::shared_ptr<Node>> childNodes;
+  std::weak_ptr<Node> parentNode;
+  std::weak_ptr<Node> ownerDocument;
+  uint64_t debugId = 0; // monotonic id for debugging
 
-    // --- Core DOM methods ---
-    virtual std::shared_ptr<Node> appendChild(std::shared_ptr<Node> child);
-    virtual std::shared_ptr<Node> insertBefore(std::shared_ptr<Node> newChild, std::shared_ptr<Node> refChild);
-    virtual std::shared_ptr<Node> removeChild(std::shared_ptr<Node> child);
-    virtual std::shared_ptr<Node> replaceChild(std::shared_ptr<Node> newChild, std::shared_ptr<Node> oldChild);
-    virtual std::shared_ptr<Node> cloneNode(bool deep = false) const;
-    virtual bool contains(std::shared_ptr<Node> other) const;
-    virtual bool hasChildNodes() const;
+  // --- Core DOM methods ---
+  virtual std::shared_ptr<Node> appendChild(std::shared_ptr<Node> child);
+  virtual std::shared_ptr<Node> insertBefore(std::shared_ptr<Node> newChild, std::shared_ptr<Node> refChild);
+  virtual std::shared_ptr<Node> removeChild(std::shared_ptr<Node> child);
+  virtual std::shared_ptr<Node> replaceChild(std::shared_ptr<Node> newChild, std::shared_ptr<Node> oldChild);
+  virtual std::shared_ptr<Node> cloneNode(bool deep = false) const;
+  virtual bool contains(std::shared_ptr<Node> other) const;
+  virtual bool hasChildNodes() const;
 
-    // --- textContent convenience (moved from adapter) ---
-    virtual std::string textContent() const;            // Concatenate descendant text nodes
-    virtual void setTextContent(const std::string& v);  // Replace children (or value for Text)
+  // --- textContent convenience (moved from adapter) ---
+  virtual std::string textContent() const;           // Concatenate descendant text nodes
+  virtual void setTextContent(const std::string& v); // Replace children (or value for Text)
 
-    // NOTE: innerHTML/outerHTML removed from Node to better match spec (they belong on Element).
+  // NOTE: innerHTML/outerHTML removed from Node to better match spec (they belong on Element).
 
-    // --- Event listeners (engine-agnostic bookkeeping) ---
-    void addEventListener(const std::string& type);
-    void removeEventListener(const std::string& type);
-    bool hasEventListener(const std::string& type) const;
-    void dispatchEvent(const std::string& type); // Core dispatch (no bubbling yet)
-    // --- Properties ---
-    std::shared_ptr<Node> firstChild() const;
-    std::shared_ptr<Node> lastChild() const;
-    std::shared_ptr<Node> nextSibling() const;
-    std::shared_ptr<Node> previousSibling() const;
-    virtual ~Node() = default; // public for shared_ptr destruction
+  // --- Event listeners (engine-agnostic bookkeeping) ---
+  void addEventListener(const std::string& type);
+  void removeEventListener(const std::string& type);
+  bool hasEventListener(const std::string& type) const;
+  void dispatchEvent(const std::string& type); // Core dispatch (no bubbling yet)
+  // --- Properties ---
+  std::shared_ptr<Node> firstChild() const;
+  std::shared_ptr<Node> lastChild() const;
+  std::shared_ptr<Node> nextSibling() const;
+  std::shared_ptr<Node> previousSibling() const;
+  virtual ~Node() = default; // public for shared_ptr destruction
 
 protected:
-    std::unordered_map<std::string, size_t> listenerCounts; // type -> count
+  std::unordered_map<std::string, size_t> listenerCounts; // type -> count
 };
 
 class Element : public Node {
 public:
-    std::unordered_map<std::string, std::string> attributes;
-    std::string tagName;
-    // Simple style store (cssText only for now)
-    std::string styleCssText;
+  std::unordered_map<std::string, std::string> attributes;
+  std::string tagName;
+  // Simple style store (cssText only for now)
+  std::string styleCssText;
 
-    // Optional per-node attachment for rendering/layout/state without bloating base Element.
-    void* data = nullptr; // opaque engine attachment (allocated/freed by engine subsystems)
+  // Optional per-node attachment for rendering/layout/state without bloating base Element.
+  void* data = nullptr; // opaque engine attachment (allocated/freed by engine subsystems)
 
-    // --- Element methods ---
-    void setAttribute(const std::string& name, const std::string& value);
-    std::string getAttribute(const std::string& name) const;
-    void removeAttribute(const std::string& name);
+  // --- Element methods ---
+  void setAttribute(const std::string& name, const std::string& value);
+  std::string getAttribute(const std::string& name) const;
+  void removeAttribute(const std::string& name);
 
 #ifndef DOM_STRICT
-    // Convenience DOM-style accessors (NON-STANDARD shorthands for get/setAttribute("class"))
-    std::string className() const { return getAttribute("class"); } // NON-STANDARD
-    void setClassName(const std::string& v) { setAttribute("class", v); } // NON-STANDARD
+  // Convenience DOM-style accessors (NON-STANDARD shorthands for get/setAttribute("class"))
+  std::string className() const {
+    return getAttribute("class");
+  } // NON-STANDARD
+  void setClassName(const std::string& v) {
+    setAttribute("class", v);
+  } // NON-STANDARD
 #endif
-    // innerHTML / outerHTML (basic, minimal) -- NON-STANDARD SIMPLIFIED IMPLEMENTATION
-    std::string innerHTML() const;              // Serialize children (very minimal)
-    void setInnerHTML(const std::string& html); // Replace children from simple HTML/text (stub)
-    std::string outerHTML() const;              // Serialize this element including its tag
+  // innerHTML / outerHTML (basic, minimal) -- NON-STANDARD SIMPLIFIED IMPLEMENTATION
+  std::string innerHTML() const;              // Serialize children (very minimal)
+  void setInnerHTML(const std::string& html); // Replace children from simple HTML/text (stub)
+  std::string outerHTML() const;              // Serialize this element including its tag
 
 #ifndef DOM_EXCLUDE_STYLE_HELPERS
-    const std::string& getStyleCssText() const { return styleCssText; } // NON-STANDARD convenience
-    void setStyleCssText(const std::string& v) { // NON-STANDARD convenience; syncs style attribute
-        styleCssText = v;
-        attributes["style"] = v;
+  const std::string& getStyleCssText() const {
+    return styleCssText;
+  }                                            // NON-STANDARD convenience
+  void setStyleCssText(const std::string& v) { // NON-STANDARD convenience; syncs style attribute
+    styleCssText = v;
+    attributes["style"] = v;
     // Opaque: engine layer may hook style changes; DOM stays generic.
-    }
+  }
 #endif
-    std::string serializeOpenTag() const; // INTERNAL NON-STANDARD helper
+  std::string serializeOpenTag() const; // INTERNAL NON-STANDARD helper
 
-    // --- Query methods ---
-    std::vector<std::shared_ptr<Element>> getElementsByTagName(const std::string& name) const;
-    // ...add more as needed...
+  // --- Query methods ---
+  std::vector<std::shared_ptr<Element>> getElementsByTagName(const std::string& name) const;
+  // ...add more as needed...
 };
 
 class Text : public Node {
 public:
-    Text(const std::string& value);
+  Text(const std::string& value);
 };
 
 class Document : public Node {
 public:
-    Document();
-    std::shared_ptr<Element> createElement(const std::string& tag);
-    std::shared_ptr<Text> createTextNode(const std::string& value);
+  Document();
+  std::shared_ptr<Element> createElement(const std::string& tag);
+  std::shared_ptr<Text> createTextNode(const std::string& value);
 };
 
 // Factory helpers

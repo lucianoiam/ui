@@ -1,9 +1,9 @@
 #pragma once
-#include <include/core/SkSurface.h>
 #include <include/core/SkCanvas.h>
 #include <include/core/SkImage.h>
-#include <quickjs.h>
+#include <include/core/SkSurface.h>
 #include <memory>
+#include <quickjs.h>
 #include <unordered_map>
 
 // SkCanvasView: backs a logical <div> with a Skia surface for drawing from JS.
@@ -13,10 +13,10 @@
 //  - JS can issue drawing ops via gfxFillRect(handle,x,y,w,h,color)
 //  - Later we can map this to DOM elements by attribute (data-gfx-id) or direct pointer wiring.
 struct SkCanvasView {
-    int id;
-    int width;
-    int height;
-    sk_sp<SkSurface> surface;
+  int id;
+  int width;
+  int height;
+  sk_sp<SkSurface> surface;
 };
 
 // Create and register a new surface, returning its id (or -1 on failure)

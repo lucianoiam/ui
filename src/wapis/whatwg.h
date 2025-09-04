@@ -4,7 +4,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-void define_whatwg_globals(JSContext *ctx);
+void define_whatwg_globals(JSContext* ctx);
 #ifdef __cplusplus
 }
 #endif
