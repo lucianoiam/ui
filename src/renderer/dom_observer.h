@@ -8,13 +8,25 @@ class Element;
 }
 
 class DomObserver {
-public:
-  virtual void onElementCreated(dom::Element*) {}
-  virtual void onElementRemoved(dom::Element*) {}
-  virtual void onAttributeChanged(dom::Element*, const std::string& name, const std::string& oldValue,
-                                  const std::string& newValue) {}
-  virtual void onChildListChanged(dom::Element*) {}
-  virtual ~DomObserver() = default;
+ public:
+   virtual void onElementCreated(dom::Element*)
+   {
+   }
+
+   virtual void onElementRemoved(dom::Element*)
+   {
+   }
+
+   virtual void onAttributeChanged(dom::Element*, const std::string& name, const std::string& oldValue,
+                                   const std::string& newValue)
+   {
+   }
+
+   virtual void onChildListChanged(dom::Element*)
+   {
+   }
+
+   virtual ~DomObserver() = default;
 };
 
 // Registration API (no ownership transfer). Not thread-safe (single-threaded JS assumption).

@@ -13,10 +13,10 @@
 //  - JS can issue drawing ops via gfxFillRect(handle,x,y,w,h,color)
 //  - Later we can map this to DOM elements by attribute (data-gfx-id) or direct pointer wiring.
 struct SkCanvasView {
-  int id;
-  int width;
-  int height;
-  sk_sp<SkSurface> surface;
+   int id;
+   int width;
+   int height;
+   sk_sp<SkSurface> surface;
 };
 
 // Create and register a new surface, returning its id (or -1 on failure)

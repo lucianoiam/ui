@@ -10,9 +10,9 @@ class Document;
 } // namespace dom
 
 struct InputEvent {
-  std::string type; // mousedown, mousemove, mouseup
-  int x = 0;
-  int y = 0;
+   std::string type; // mousedown, mousemove, mouseup
+   int x = 0;
+   int y = 0;
 };
 
 // Platform-agnostic dispatcher API

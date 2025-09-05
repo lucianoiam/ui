@@ -3,10 +3,12 @@
 #define DOM_ADAPTER_H
 #include <memory>
 #include <quickjs.h>
+
 namespace dom {
 class Element;
 class Node;
 } // namespace dom
+
 // Public adapter API (C++ linkage). Responsibilities:
 //  - dom_define_node_proto: registers the shared DOMNode prototype & class with a context
 //  - dom_create_document: returns a new Document (with body) bridged to C++ DOM
