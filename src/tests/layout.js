@@ -18,17 +18,17 @@ function Box({style = '', children}) {
 function App() {
    // Root div relies on internal viewport sizing; no explicit width/height.
    return htm`<div style="display:flex; flex-direction:column;">
-    <${Box} style="flex:2;"></${Box}>
-    <${Box} style="display:flex; flex-direction:row; flex:1;">
-      <${Box} style="flex:1;"></${Box}>
-      <${Box} style="flex:1;"></${Box}>
-      <${Box} style="flex:1;"></${Box}>
-    </${Box}>
-    <${Box} style="display:flex; flex-direction:row; flex:1;">
       <${Box} style="flex:2;"></${Box}>
-      <${Box} style="flex:1;"></${Box}>
-    </${Box}>
-  </div>`;
+      <${Box} style="display:flex; flex-direction:row; flex:1;">
+         <${Box} style="flex:1;"></${Box}>
+         <${Box} style="flex:1;"></${Box}>
+         <${Box} style="flex:1;"></${Box}>
+      </${Box}>
+      <${Box} style="display:flex; flex-direction:row; flex:1;">
+         <${Box} style="flex:2;"></${Box}>
+         <${Box} style="flex:1;"></${Box}>
+      </${Box}>
+   </div>`;
 }
 
 render(htm`<${App} />`, document.body);
