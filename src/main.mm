@@ -495,6 +495,16 @@ TestResult run_preact_test(const char *test_js, const char *output_html,
     if (JS_IsException(r))
       dump_exception(ctx);
     JS_FreeValue(ctx, r);
+    // Load lightweight runtime helpers (functions.js) if present (provides htmx)
+    size_t rt_len = 0; char *rt_js = load_file("src/runtime/functions.js", &rt_len);
+    if (rt_js) {
+      JSValue rr = JS_Eval(ctx, rt_js, rt_len, "src/runtime/functions.js", JS_EVAL_TYPE_GLOBAL);
+      free(rt_js);
+      if (JS_IsException(rr)) dump_exception(ctx);
+      JS_FreeValue(ctx, rr);
+    } else {
+      fprintf(stderr, "[WARN] runtime/functions.js missing; htmx unavailable\n");
+    }
   } else {
     fprintf(stderr,
             "[WARN] build/htm.js not found; html templates unavailable\n");

@@ -61,12 +61,12 @@ function ShapeCell({index}) {
    const style =
       `position:absolute; left:${left}px; top:${top}px; width:${size}px; height:${size}px; ` +
       `background:transparent; border:1px solid #fff;`;
-   return htm`<canvas ref=${ref} style=${style}></canvas>`;
+   return htmx`<canvas ref=${ref} style=${style}></canvas>`;
 }
 
 function App() {
-   const cells = Array.from({length: 4}, (_, i) => htm`<${ShapeCell} key=${i} index=${i} />`);
-   return htm`<canvas style="position:relative; width:800px; height:600px; display:block;">${cells}</canvas>`;
+   const cells = Array.from({length: 4}, (_, i) => htmx`<ShapeCell key=${i} index=${i} />`);
+   return htmx`<canvas style="position:relative; width:800px; height:600px; display:block;">${cells}</canvas>`;
 }
 
-render(htm`<${App} />`, document.body);
+render(htmx`<App />`, document.body);

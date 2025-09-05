@@ -4,7 +4,7 @@
 const {render} = preact;
 
 function ListItem({value}) {
-   return htm`
+   return htmx`
 		<li>
 			<span style="color: green;">Item: </span>
 			<b>${value}</b>
@@ -12,31 +12,31 @@ function ListItem({value}) {
 }
 
 function List({count}) {
-   return htm`
+   return htmx`
 		<ul class="big-list">
-		${Array.from({length: count}, (_, i) => htm`
-			<${ListItem} value=${'Value ' + i} />
+		${Array.from({length: count}, (_, i) => htmx`
+			<ListItem value=${'Value ' + i} />
 		`)}
 		</ul>`;
 }
 
 function Nested({depth}) {
-   return depth <= 0 ? htm`<span>Leaf</span>` : htm`<div class="nested">
+   return depth <= 0 ? htmx`<span>Leaf</span>` : htmx`<div class="nested">
 				<span>Depth: ${depth}</span>
-				<${Nested} depth=${depth - 1} />
+				<Nested depth=${depth - 1} />
 			  </div>`;
 }
 
 function App() {
-   return htm`
+   return htmx`
 		<div class="container">
 			<h1>DOM Stress Test</h1>
 			<p style="color: blue; font-weight: bold;">
 				Rendering 500 list items and 10 levels of nesting
 			</p>
-			<${List} count=${500} />
-			<${Nested} depth=${10} />
+			<List count=${500} />
+			<Nested depth=${10} />
 		</div>`;
 }
 
-render(htm`<${App} />`, document.body);
+render(htmx`<App />`, document.body);
