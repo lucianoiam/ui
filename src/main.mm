@@ -770,38 +770,41 @@ int main(int argc, char **argv) {
       char viewportDecl[128];
       snprintf(viewportDecl, sizeof(viewportDecl),
                "globalThis.__viewport={w:%d,h:%d};\n", g_winW, g_winH);
-      const char *dispatchBody = R"JS(
-if(!globalThis.__dispatchNativeMouseInstalled){
-    globalThis.__dispatchNativeMouseInstalled=true;
-    globalThis.__dispatchNativeMouse=function(ev){
-        if(!ev||!ev.type)return; const t=ev.type; const x=ev.clientX|0; const y=ev.clientY|0;
-        var target=null; var nodes=document.getElementsByTagName?Array.from(document.getElementsByTagName('canvas')):[];
-        for(var i=nodes.length-1;i>=0;i--){
-            var n=nodes[i]; var st=n.getAttribute? (n.getAttribute('style')||''):'';
-            var mW=st.match(/width:(\d+)/); var mH=st.match(/height:(\d+)/); var mL=st.match(/left:(\d+)/); var mT=st.match(/top:(\d+)/);
-            var w=mW?+mW[1]:64; var h=mH?+mH[1]:64; var lx=mL?+mL[1]:0; var ty=mT?+mT[1]:0;
-            if(x>=lx&&x<=lx+w&&y>=ty&&y<=ty+h){ target=n; break; }
-        }
-        if(!target) return;
-        if(t==='mousedown') {
-            var st=target.getAttribute('style')||'';
-            var mL=/left:(\d+)/.exec(st); var mT=/top:(\d+)/.exec(st);
-            target.__draggingOffset=[x-(mL?+mL[1]:0), y-(mT?+mT[1]:0)];
-        }
-        if(t==='mousemove' && target.__draggingOffset){
-            var off=target.__draggingOffset; var st=target.getAttribute('style')||'';
-            var mW=st.match(/width:(\d+)/); var mH=st.match(/height:(\d+)/); var w=mW?+mW[1]:64; var h=mH?+mH[1]:64;
-            var nx=Math.max(0,Math.min(globalThis.__viewport.w-w,x-off[0]));
-            var ny=Math.max(0,Math.min(globalThis.__viewport.h-h,y-off[1]));
-            target.setAttribute('style', st.replace(/left:\d+/, 'left:'+nx).replace(/top:\d+/, 'top:'+ny));
-            if(typeof requestComposite==='function') requestComposite();
-        }
-        if(t==='mouseup') { if(target.__draggingOffset) delete target.__draggingOffset; }
-        var arr = target['__listeners_'+t];
-        if (Array.isArray(arr)) { for (var i=0;i<arr.length;i++) { try { arr[i].call(target, ev); } catch(e) {} } }
-    };
-}
-)JS";
+    const char *dispatchBody =
+      "if(!globalThis.__dispatchNativeMouseInstalled){\n"
+      "  globalThis.__dispatchNativeMouseInstalled=true;\n"
+      "  globalThis.__dispatchNativeMouse=function(ev){\n"
+      "    if(!ev||!ev.type)return; const t=ev.type; const x=ev.clientX|0; const y=ev.clientY|0;\n"
+      "    var target=null; var nodes=document.getElementsByTagName?" \
+      "Array.from(document.getElementsByTagName('canvas')):[];\n"
+      "    for(var i=nodes.length-1;i>=0;i--){\n"
+      "      var n=nodes[i]; var st=n.getAttribute? (n.getAttribute('style')||''):'';\n"
+      "      var mW=st.match(/width:(\\d+)/); var mH=st.match(/height:(\\d+)/);" \
+      " var mL=st.match(/left:(\\d+)/); var mT=st.match(/top:(\\d+)/);\n"
+      "      var w=mW?+mW[1]:64; var h=mH?+mH[1]:64; var lx=mL?+mL[1]:0; var ty=mT?+mT[1]:0;\n"
+      "      if(x>=lx&&x<=lx+w&&y>=ty&&y<=ty+h){ target=n; break; }\n"
+      "    }\n"
+      "    if(!target) return;\n"
+      "    if(t==='mousedown'){\n"
+      "      var st=target.getAttribute('style')||'';\n"
+      "      var mL=/left:(\\d+)/.exec(st); var mT=/top:(\\d+)/.exec(st);\n"
+      "      target.__draggingOffset=[x-(mL?+mL[1]:0), y-(mT?+mT[1]:0)];\n"
+      "    }\n"
+      "    if(t==='mousemove' && target.__draggingOffset){\n"
+      "      var off=target.__draggingOffset; var st=target.getAttribute('style')||'';\n"
+      "      var mW=st.match(/width:(\\d+)/); var mH=st.match(/height:(\\d+)/);" \
+      " var w=mW?+mW[1]:64; var h=mH?+mH[1]:64;\n"
+      "      var nx=Math.max(0,Math.min(globalThis.__viewport.w-w,x-off[0]));\n"
+      "      var ny=Math.max(0,Math.min(globalThis.__viewport.h-h,y-off[1]));\n"
+      "      target.setAttribute('style', st.replace(/left:\\d+/, 'left:'+nx)" \
+      ".replace(/top:\\d+/, 'top:'+ny));\n"
+      "      if(typeof requestComposite==='function') requestComposite();\n"
+      "    }\n"
+      "    if(t==='mouseup'){ if(target.__draggingOffset) delete target.__draggingOffset; }\n"
+      "    var arr = target['__listeners_'+t];\n"
+      "    if (Array.isArray(arr)) { for (var i=0;i<arr.length;i++){ try { arr[i].call(target, ev); } catch(e) {} } }\n"
+      "  };\n"
+      "}\n";
       std::string dispatchSrc = std::string(viewportDecl) + dispatchBody;
       JSValue r =
           JS_Eval(g_deferred_ctx, dispatchSrc.c_str(), dispatchSrc.size(),

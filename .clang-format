@@ -20,3 +20,14 @@ ObjCBlockIndentWidth: 3
 ObjCBinPackProtocolList: Never
 ObjCSpaceAfterProperty: true
 ObjCSpaceBeforeProtocolList: true
+
+---
+Language: JavaScript
+BasedOnStyle: Google
+IndentWidth: 3
+TabWidth: 3
+UseTab: Never
+ColumnLimit: 120
+AllowShortFunctionsOnASingleLine: None
+SpacesInParentheses: false
+SpaceBeforeParens: ControlStatements
