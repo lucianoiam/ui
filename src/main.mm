@@ -822,6 +822,19 @@ int main(int argc, char **argv) {
       if (JS_IsException(r))
         dump_exception(g_deferred_ctx);
       JS_FreeValue(g_deferred_ctx, r);
+      // Install requestComposite throttling (~16ms) to coalesce rapid mousemove events
+      const char *throttleComposite =
+          "if(typeof requestComposite==='function' && !globalThis.__rcThrottle){" \
+          "(function(){var last=0;var pending=false;function fire(){pending=false;last=Date.now();requestCompositeImmediate();}" \
+          "if(!globalThis.requestCompositeImmediate){globalThis.requestCompositeImmediate=requestComposite;}" \
+          "globalThis.requestComposite=function(){var now=Date.now();var dt=now-last;" \
+          "if(dt>=16){fire();}else if(!pending && typeof setTimeout==='function'){pending=true;setTimeout(fire,16-dt);} };" \
+          "globalThis.__rcThrottle=true;})();}";
+      JSValue tr = JS_Eval(g_deferred_ctx, throttleComposite, strlen(throttleComposite),
+                           "<throttle_requestComposite>", JS_EVAL_TYPE_GLOBAL);
+      if (JS_IsException(tr))
+        dump_exception(g_deferred_ctx);
+      JS_FreeValue(g_deferred_ctx, tr);
       JS_FreeValue(g_deferred_ctx, global);
     }
     [app run];
