@@ -90,7 +90,6 @@ INCLUDES=(
 # C++ sources
 SOURCES=(
   "$SRC_DIR/main.mm"
-  "$SRC_DIR/scratch/SkiaDisplay.mm"
   "$SRC_DIR/gfx/sk_canvas_view.cpp"
   "$SRC_DIR/renderer/dom_observer.cpp"
   "$SRC_DIR/renderer/renderer.cpp"
@@ -98,9 +97,9 @@ SOURCES=(
   "$SRC_DIR/wapis/dom_adapter.cpp"
   "$SRC_DIR/wapis/dom.cpp"
   "$SRC_DIR/wapis/dom_hooks.cpp"
-  "$SRC_DIR/layout/layout_yoga.cpp"
-  "$SRC_DIR/css/css_parser.cpp"
-  "$SRC_DIR/render/attachments.cpp"
+  "$SRC_DIR/renderer/layout_yoga.cpp"
+  "$SRC_DIR/renderer/css_parser.cpp"
+  "$SRC_DIR/renderer/data.cpp"
   "$SRC_DIR/wapis/whatwg.c"
   "$SRC_DIR/input/input.cpp"
   "$SRC_DIR/input/mac.mm"

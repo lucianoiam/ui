@@ -12,7 +12,7 @@
 #include <unistd.h>
 // Lexbor for pretty HTML formatting
 #include "gfx/sk_canvas_view.h"
-#include "layout/layout_yoga.h"
+#include "renderer/layout_yoga.h"
 #include "renderer/renderer.h"
 #include "renderer/scheduler.h"
 #include "viewport.h" // default viewport size
