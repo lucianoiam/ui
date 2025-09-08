@@ -1,7 +1,7 @@
 // dom_adapter.cpp - QuickJS <-> C++ DOM bridge using dom.hpp backend (renamed from dom_qjs.cpp)
 #include "dom_adapter.h"
 #include "dom.hpp"
-#include "gfx/sk_canvas_view.h" // placed outside anonymous namespace to keep gfx_* symbols in global namespace
+#include "renderer/sk_canvas_view.h" // moved
 #include "renderer/dom_observer.h"
 #include <cstdio>
 #include <cstdlib>
@@ -33,7 +33,7 @@ static bool g_dom_debug = false;
 static size_t g_wrap_count = 0;
 static size_t g_finalize_count = 0;
 // Map each Element* to an associated Skia canvas id (created lazily on first getContext call)
-#include "gfx/sk_canvas_view.h"
+#include "renderer/sk_canvas_view.h"
 static std::unordered_map<Element*, int> g_element_canvas_ids; // stays internal; accessor provided outside namespace
 
 static void ensure_dom_debug_init()

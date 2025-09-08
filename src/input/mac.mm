@@ -1,7 +1,7 @@
 #import "InputImageView.h"
 #include "input.h"
 #include "renderer/renderer.h"
-#include "viewport.h"
+#include "../renderer/viewport.h"
 #include "wapis/dom.hpp"
 #include "wapis/dom_adapter.h"
 #import <Cocoa/Cocoa.h>

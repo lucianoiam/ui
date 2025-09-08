@@ -90,7 +90,7 @@ INCLUDES=(
 # C++ sources
 SOURCES=(
   "$SRC_DIR/main.mm"
-  "$SRC_DIR/gfx/sk_canvas_view.cpp"
+  "$SRC_DIR/renderer/sk_canvas_view.cpp"
   "$SRC_DIR/renderer/dom_observer.cpp"
   "$SRC_DIR/renderer/renderer.cpp"
   "$SRC_DIR/renderer/scheduler.cpp"

@@ -11,11 +11,11 @@
 #include <sys/types.h>
 #include <unistd.h>
 // Lexbor for pretty HTML formatting
-#include "gfx/sk_canvas_view.h"
+#include "renderer/sk_canvas_view.h"
 #include "renderer/layout_yoga.h"
 #include "renderer/renderer.h"
 #include "renderer/scheduler.h"
-#include "viewport.h" // default viewport size
+#include "renderer/viewport.h" // default viewport size
 #import <Cocoa/Cocoa.h>
 #include <include/core/SkCanvas.h>
 #include <include/core/SkImage.h>
