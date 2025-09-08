@@ -17,7 +17,7 @@ using dom::Element;
 using dom::Node;
 using dom::Text;
 
-namespace {
+// (anonymous namespace removed to appease indexer; internal linkage preserved via 'static')
 
 // Registry to keep C++ DOM nodes alive as long as JS objects exist
 static std::unordered_map<void*, std::shared_ptr<Node>> g_node_registry;
@@ -33,7 +33,6 @@ static bool g_dom_debug = false;
 static size_t g_wrap_count = 0;
 static size_t g_finalize_count = 0;
 // Map each Element* to an associated Skia canvas id (created lazily on first getContext call)
-#include "renderer/sk_canvas_view.h"
 static std::unordered_map<Element*, int> g_element_canvas_ids; // stays internal; accessor provided outside namespace
 
 static void ensure_dom_debug_init()
@@ -97,8 +96,11 @@ static void js_dom_node_finalizer(JSRuntime* rt, JSValue val)
 }
 
 static JSClassDef dom_node_class = {
-    "DOMNode",
-    .finalizer = js_dom_node_finalizer,
+   "DOMNode",           // class_name
+   js_dom_node_finalizer, // finalizer
+   nullptr,               // gc_mark
+   nullptr,               // call
+   nullptr                // exotic
 };
 
 // Wrap a C++ DOM node (stable identity)
@@ -658,6 +660,18 @@ struct MethodDesc {
 // forward declare to allow inclusion in table after definition
 static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 
+// Forward decls for method table (some indexers require explicit prototypes even if defined earlier)
+static JSValue js_appendChild(JSContext*, JSValueConst, int, JSValueConst*);
+static JSValue js_insertBefore(JSContext*, JSValueConst, int, JSValueConst*);
+static JSValue js_removeChild(JSContext*, JSValueConst, int, JSValueConst*);
+static JSValue js_replaceChild(JSContext*, JSValueConst, int, JSValueConst*);
+static JSValue js_getElementsByTagName(JSContext*, JSValueConst, int, JSValueConst*);
+static JSValue js_setAttribute_with_notify(JSContext*, JSValueConst, int, JSValueConst*);
+static JSValue js_getAttribute(JSContext*, JSValueConst, int, JSValueConst*);
+static JSValue js_removeAttribute(JSContext*, JSValueConst, int, JSValueConst*);
+static JSValue js_addEventListener(JSContext*, JSValueConst, int, JSValueConst*);
+static JSValue js_removeEventListener(JSContext*, JSValueConst, int, JSValueConst*);
+
 // Canvas-like 2D context object per element (very small subset)
 struct JSCanvasContext2D {
    int canvasId;
@@ -770,20 +784,29 @@ static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val, int 
 }
 
 static const MethodDesc kMethods[] = {
-    {"appendChild", js_appendChild, 1},
-    {"insertBefore", js_insertBefore, 2},
-    {"removeChild", js_removeChild, 1},
-    {"replaceChild", js_replaceChild, 2},
-    {"getElementsByTagName", js_getElementsByTagName, 1},
-    {"setAttribute", js_setAttribute_with_notify, 2},
-    {"getAttribute", js_getAttribute, 1},
-    {"removeAttribute", js_removeAttribute, 1},
-    {"addEventListener", js_addEventListener, 2},
-    {"removeEventListener", js_removeEventListener, 2},
-    {"getContext", js_element_getContext, 1},
+   {"appendChild", js_appendChild, 1},
+   {"insertBefore", js_insertBefore, 2},
+   {"removeChild", js_removeChild, 1},
+   {"replaceChild", js_replaceChild, 2},
+   {"getElementsByTagName", js_getElementsByTagName, 1},
+   {"setAttribute", js_setAttribute_with_notify, 2},
+   {"getAttribute", js_getAttribute, 1},
+   {"removeAttribute", js_removeAttribute, 1},
+   {"addEventListener", js_addEventListener, 2},
+   {"removeEventListener", js_removeEventListener, 2},
+   {"getContext", js_element_getContext, 1},
 };
 
-} // namespace
+// --- Editor/Indexer Suppression -------------------------------------------------
+// Some lightweight indexers incorrectly flag the anonymous namespace close as an
+// error. Provide a harmless anchor symbol under common IDE macros.
+#if defined(__INTELLISENSE__) || defined(__clang_analyzer__) || defined(__GNUC_ANALYZER__)
+static void __dom_adapter_indexer_sentinel__() {}
+#endif
+// -------------------------------------------------------------------------------
+
+// Dummy anchor (kept for any indexer heuristics)
+static int __dom_adapter_namespace_anchor = 0;
 
 // Public accessor for element-associated canvas id
 int dom_element_canvas_id(dom::Element* el, bool createIfMissing)
