@@ -21,10 +21,18 @@ using Listener = std::function<void(const InputEvent&)>;
 
 class InputManager {
  public:
-   explicit InputManager(std::shared_ptr<dom::Document> doc): doc_(std::move(doc)) {}
-   void setDocument(std::shared_ptr<dom::Document> doc) { doc_ = std::move(doc); }
+   explicit InputManager(std::shared_ptr<dom::Document> doc) : doc_(std::move(doc))
+   {
+   }
+
+   void setDocument(std::shared_ptr<dom::Document> doc)
+   {
+      doc_ = std::move(doc);
+   }
+
    void feed(const InputEvent& ev); // platform layer calls this
    dom::Element* hitTest(int x, int y);
+
  private:
    std::shared_ptr<dom::Document> doc_;
 };

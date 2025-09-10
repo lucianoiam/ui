@@ -22,6 +22,30 @@ ObjCSpaceAfterProperty: true
 ObjCSpaceBeforeProtocolList: true
 
 ---
+Language: ObjC
+BasedOnStyle: LLVM
+DisableFormat: false
+ColumnLimit: 120
+IndentWidth: 3
+TabWidth: 3
+UseTab: Never
+BreakBeforeBraces: Stroustrup
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+SeparateDefinitionBlocks: Always
+SpacesInParentheses: false
+SpaceBeforeParens: ControlStatements
+PointerAlignment: Left
+DerivePointerAlignment: false
+ObjCBlockIndentWidth: 3
+ObjCBinPackProtocolList: Never
+ObjCSpaceAfterProperty: true
+ObjCSpaceBeforeProtocolList: true
+
+---
 Language: JavaScript
 BasedOnStyle: Google
 IndentWidth: 3

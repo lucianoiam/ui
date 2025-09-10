@@ -1,29 +1,11 @@
 #include "input.h"
+#include "renderer/css_parser.h"
 #include "wapis/dom.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <unordered_map>
 
 namespace input {
-
-// Naive style parser helpers
-static int parseDecl(const std::string& style, const char* key)
-{
-   size_t p = style.find(key);
-   if (p == std::string::npos)
-      return -1;
-   size_t c = style.find(':', p);
-   size_t sc = style.find(';', c);
-   if (c == std::string::npos)
-      return -1;
-   std::string num = style.substr(c + 1, sc == std::string::npos ? std::string::npos : sc - (c + 1));
-   try {
-      return std::stoi(num);
-   }
-   catch (...) {
-      return -1;
-   }
-}
 
 static void collectElementsWith(dom::Element* root, std::vector<dom::Element*>& out)
 {
@@ -46,21 +28,26 @@ dom::Element* InputManager::hitTest(int x, int y)
    for (auto& c : doc->childNodes)
       if (c && c->nodeType == dom::NodeType::ELEMENT)
          collectElementsWith((dom::Element*)c.get(), els);
-   // iterate in insertion order treat later elements as on top
+   // iterate in insertion order; later elements are on top
    for (auto it = els.rbegin(); it != els.rend(); ++it) {
       dom::Element* el = *it;
-      auto itAttr = el->attributes.find("style");
-      if (itAttr == el->attributes.end())
-         continue;
-      const std::string& s = itAttr->second;
-      int left = parseDecl(s, "left");
-      int top = parseDecl(s, "top");
-      int w = parseDecl(s, "width");
-      if (w < 0)
-         w = 64;
-      int h = parseDecl(s, "height");
-      if (h < 0)
-         h = 64;
+      const std::string& cssText = el->styleCssText;
+      auto decls = css::parse_inline(cssText);
+      auto get_px = [&](const char* prop, int defv) {
+         auto it = decls.kv.find(prop);
+         if (it == decls.kv.end())
+            return defv;
+         float v = -1.f;
+         std::string unit;
+         if (css::parse_number_unit(it->second, v, unit) && v >= 0 && (unit.empty() || unit == "px")) {
+            return (int)std::lround(v);
+         }
+         return defv;
+      };
+      int left = get_px("left", 0);
+      int top = get_px("top", 0);
+      int w = get_px("width", 64);
+      int h = get_px("height", 64);
       if (x >= left && x <= left + w && y >= top && y <= top + h)
          return el;
    }

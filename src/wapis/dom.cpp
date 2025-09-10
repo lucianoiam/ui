@@ -14,7 +14,8 @@ std::shared_ptr<Node> Node::appendChild(std::shared_ptr<Node> child)
    child->parentNode = shared_from_this();
    childNodes.push_back(child);
    if (auto doc = std::dynamic_pointer_cast<Document>(ownerDocument.lock())) {
-      if (auto hook = doc->getMutationHook()) hook(this, "append", child.get());
+      if (auto hook = doc->getMutationHook())
+         hook(this, "append", child.get());
    }
    return child;
 }
@@ -29,7 +30,8 @@ std::shared_ptr<Node> Node::insertBefore(std::shared_ptr<Node> newChild, std::sh
    newChild->parentNode = shared_from_this();
    childNodes.insert(it, newChild);
    if (auto doc = std::dynamic_pointer_cast<Document>(ownerDocument.lock())) {
-      if (auto hook = doc->getMutationHook()) hook(this, "insert", newChild.get());
+      if (auto hook = doc->getMutationHook())
+         hook(this, "insert", newChild.get());
    }
    return newChild;
 }
@@ -39,7 +41,8 @@ std::shared_ptr<Node> Node::removeChild(std::shared_ptr<Node> child)
    auto it = std::find(childNodes.begin(), childNodes.end(), child);
    if (it != childNodes.end()) {
       if (auto doc = std::dynamic_pointer_cast<Document>(ownerDocument.lock())) {
-         if (auto hook = doc->getMutationHook()) hook(this, "remove", child.get());
+         if (auto hook = doc->getMutationHook())
+            hook(this, "remove", child.get());
       }
       (*it)->parentNode.reset();
       childNodes.erase(it);
@@ -53,7 +56,8 @@ std::shared_ptr<Node> Node::replaceChild(std::shared_ptr<Node> newChild, std::sh
    auto it = std::find(childNodes.begin(), childNodes.end(), oldChild);
    if (it != childNodes.end()) {
       if (auto doc = std::dynamic_pointer_cast<Document>(ownerDocument.lock())) {
-         if (auto hook = doc->getMutationHook()) hook(this, "replace", oldChild.get());
+         if (auto hook = doc->getMutationHook())
+            hook(this, "replace", oldChild.get());
       }
       newChild->parentNode = shared_from_this();
       (*it)->parentNode.reset();
@@ -150,7 +154,7 @@ bool Node::hasEventListener(const std::string& type) const
 
 void Node::dispatchEvent(const std::string& type)
 {
-      // Basic dispatch: check for a registered listener count.
+   // Basic dispatch: check for a registered listener count.
    (void)type; // no-op; adapter may integrate later.
 }
 
@@ -194,9 +198,10 @@ void Element::setAttribute(const std::string& name, const std::string& value)
       // Keep styleCssText mirror in sync (generic mirror; engine may ignore)
       const_cast<Element*>(this)->styleCssText = value;
    }
-      if (auto doc = std::dynamic_pointer_cast<Document>(ownerDocument.lock())) {
-            if (auto hook = doc->getAttributeHook()) hook(this, name, value);
-      }
+   if (auto doc = std::dynamic_pointer_cast<Document>(ownerDocument.lock())) {
+      if (auto hook = doc->getAttributeHook())
+         hook(this, name, value);
+   }
 }
 
 std::string Element::getAttribute(const std::string& name) const
@@ -330,8 +335,10 @@ uint64_t Document::nextDebugId()
 
 void Document::addObserver(DomObserver* o)
 {
-   if (!o) return;
-   if (std::find(observers_.begin(), observers_.end(), o) == observers_.end()) observers_.push_back(o);
+   if (!o)
+      return;
+   if (std::find(observers_.begin(), observers_.end(), o) == observers_.end())
+      observers_.push_back(o);
 }
 
 void Document::removeObserver(DomObserver* o)

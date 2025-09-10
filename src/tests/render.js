@@ -27,9 +27,8 @@ function ShapeCell({index}) {
    useLayoutEffect(() => {
       const el = ref.current;
       if (!el) return;
-      const styleFor = (x, y) =>
-      `position:absolute; left:${x}px; top:${y}px; width:${size}px; height:${size}px; ` +
-      `background:transparent; border:1px solid #fff;`;
+      const styleFor = (x, y) => `position:absolute; left:${x}px; top:${y}px; width:${size}px; height:${size}px; ` +
+          `background:transparent; border:1px solid #fff;`;
       el.setAttribute('style', styleFor(left, top));
       let dragging = false, offX = 0, offY = 0;
       function onDown(e) {
@@ -58,9 +57,8 @@ function ShapeCell({index}) {
       el.addEventListener('mousemove', onMove);
       el.addEventListener('mouseup', onUp);
    }, []);
-   const style =
-      `position:absolute; left:${left}px; top:${top}px; width:${size}px; height:${size}px; ` +
-      `background:transparent; border:1px solid #fff;`;
+   const style = `position:absolute; left:${left}px; top:${top}px; width:${size}px; height:${size}px; ` +
+       `background:transparent; border:1px solid #fff;`;
    return htmx`<canvas ref=${ref} style=${style}></canvas>`;
 }
 

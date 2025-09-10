@@ -26,83 +26,98 @@
 //
 // If a tag identifier is not found on globalThis, we leave it untouched (so native div/span unaffected).
 //
-(function(){
-   // Resolve a dotted path (e.g., ThemeContext.Provider) from globalThis
-   function resolveComponent(name){
-      let cur = globalThis;
-      for(const part of name.split('.')){
-         if(cur == null) { cur = undefined; break; }
-         cur = cur[part];
+(function() {
+// Resolve a dotted path (e.g., ThemeContext.Provider) from globalThis
+function resolveComponent(name) {
+   let cur = globalThis;
+   for (const part of name.split('.')) {
+      if (cur == null) {
+         cur = undefined;
+         break;
       }
-      if(cur) return cur;
-      // Lazy resolver to allow forward references within same template definition
-      const lazy = function LazyResolvedComponent(){
-         let ref = globalThis;
-         for(const part of name.split('.')){
-            if(ref == null) { ref = null; break; }
-            ref = ref[part];
-         }
-         if(typeof ref !== 'function'){
-            throw new Error('htmx: unresolved component '+name);
-         }
-         return ref.apply(this, arguments);
-      };
-      return lazy;
+      cur = cur[part];
    }
-
-   // Build new template arrays; streaming scan converting <Component and </Component>
-   function htmx(strings, ...values){
-      if(typeof htm !== 'function') throw new Error('htmx: global htm() not yet available');
-      const outStrings = [];
-      const outValues = [];
-      let buffer = '';
-      function flush(){ outStrings.push(buffer); buffer=''; }
-      for(let si=0; si<strings.length; si++){
-         const str = strings[si];
-         let i = 0;
-         while(i < str.length){
-            const lt = str.indexOf('<', i);
-            if(lt === -1){ buffer += str.slice(i); break; }
-            buffer += str.slice(i, lt); // copy before '<'
-            // Already dynamic or comment/doctype
-            if(str.startsWith('<${', lt) || str.startsWith('<!--', lt) || str.startsWith('<!DOCTYPE', lt)){
-               buffer += '<';
-               i = lt + 1;
-               continue;
-            }
-            let j = lt + 1;
-            let closing = false;
-            if(j < str.length && str[j] === '/') { closing = true; j++; }
-            const nameStart = j;
-            while(j < str.length && /[A-Za-z0-9_.]/.test(str[j])) j++;
-            const name = str.slice(nameStart, j);
-            if(name && /[A-Z]/.test(name[0])){
-               // dynamic component tag
-               buffer += '<' + (closing ? '/' : '');
-               flush();
-               outValues.push(resolveComponent(name));
-               // continue with rest of tag (attributes, >) into buffer
-               i = j; // next char after name stays for attribute accumulation
-            } else {
-               // not a component; treat literally
-               buffer += '<';
-               i = lt + 1;
-            }
+   if (cur) return cur;
+   // Lazy resolver to allow forward references within same template definition
+   const lazy = function LazyResolvedComponent() {
+      let ref = globalThis;
+      for (const part of name.split('.')) {
+         if (ref == null) {
+            ref = null;
+            break;
          }
-         if(si < values.length){
+         ref = ref[part];
+      }
+      if (typeof ref !== 'function') {
+         throw new Error('htmx: unresolved component ' + name);
+      }
+      return ref.apply(this, arguments);
+   };
+   return lazy;
+}
+
+// Build new template arrays; streaming scan converting <Component and </Component>
+function htmx(strings, ...values) {
+   if (typeof htm !== 'function') throw new Error('htmx: global htm() not yet available');
+   const outStrings = [];
+   const outValues = [];
+   let buffer = '';
+   function flush() {
+      outStrings.push(buffer);
+      buffer = '';
+   }
+   for (let si = 0; si < strings.length; si++) {
+      const str = strings[si];
+      let i = 0;
+      while (i < str.length) {
+         const lt = str.indexOf('<', i);
+         if (lt === -1) {
+            buffer += str.slice(i);
+            break;
+         }
+         buffer += str.slice(i, lt);  // copy before '<'
+         // Already dynamic or comment/doctype
+         if (str.startsWith('<${', lt) || str.startsWith('<!--', lt) || str.startsWith('<!DOCTYPE', lt)) {
+            buffer += '<';
+            i = lt + 1;
+            continue;
+         }
+         let j = lt + 1;
+         let closing = false;
+         if (j < str.length && str[j] === '/') {
+            closing = true;
+            j++;
+         }
+         const nameStart = j;
+         while (j < str.length && /[A-Za-z0-9_.]/.test(str[j])) j++;
+         const name = str.slice(nameStart, j);
+         if (name && /[A-Z]/.test(name[0])) {
+            // dynamic component tag
+            buffer += '<' + (closing ? '/' : '');
             flush();
-            outValues.push(values[si]);
+            outValues.push(resolveComponent(name));
+            // continue with rest of tag (attributes, >) into buffer
+            i = j;  // next char after name stays for attribute accumulation
+         } else {
+            // not a component; treat literally
+            buffer += '<';
+            i = lt + 1;
          }
       }
-      flush();
-      if(outStrings.length === 0) outStrings.push('');
-      const cooked = outStrings.slice();
-      cooked.raw = outStrings.slice();
-      return htm(cooked, ...outValues);
+      if (si < values.length) {
+         flush();
+         outValues.push(values[si]);
+      }
    }
+   flush();
+   if (outStrings.length === 0) outStrings.push('');
+   const cooked = outStrings.slice();
+   cooked.raw = outStrings.slice();
+   return htm(cooked, ...outValues);
+}
 
-   // Expose globally if not already defined.
-   if(!globalThis.htmx){
-      Object.defineProperty(globalThis, 'htmx', {value: htmx, enumerable:true});
-   }
+// Expose globally if not already defined.
+if (!globalThis.htmx) {
+   Object.defineProperty(globalThis, 'htmx', {value: htmx, enumerable: true});
+}
 })();

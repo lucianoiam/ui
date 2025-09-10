@@ -4,9 +4,9 @@
 #pragma once
 
 #ifdef __OBJC__
- #import <Cocoa/Cocoa.h>
- @interface InputImageView : NSImageView
- @end
+#import <Cocoa/Cocoa.h>
+@interface InputImageView : NSImageView
+@end
 #else
- typedef struct objc_object InputImageView; // opaque
+typedef struct objc_object InputImageView; // opaque
 #endif

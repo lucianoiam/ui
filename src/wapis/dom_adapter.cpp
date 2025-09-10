@@ -1,9 +1,9 @@
 // dom_adapter.cpp - QuickJS <-> C++ DOM bridge using dom.hpp backend
 #include "dom_adapter.h"
 #include "dom.hpp"
-#include "renderer/sk_canvas_view.h"
 #include "renderer/dom_observer.h"
 #include "renderer/renderer.h"
+#include "renderer/sk_canvas_view.h"
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
@@ -28,13 +28,13 @@ struct DomAdapterState {
    JSContext* ctx_for_cleanup = nullptr;
    bool in_dom_cleanup = false;
    bool dom_debug = false;
-      bool debug_checked = false;
+   bool debug_checked = false;
    size_t wrap_count = 0;
    size_t finalize_count = 0;
-      // Class definitions/ids stored per-instance (no static globals)
-      JSClassDef dom_node_class_def{};
-      bool dom_class_def_init = false;
-      JSClassID canvas_ctx2d_class_id = 0;
+   // Class definitions/ids stored per-instance (no static globals)
+   JSClassDef dom_node_class_def{};
+   bool dom_class_def_init = false;
+   JSClassID canvas_ctx2d_class_id = 0;
    // Per-runtime graphics state (opaque handle)
    GfxStateHandle* gfx_state = nullptr;
    // Renderer owned per runtime/context (avoids globals)
@@ -43,15 +43,25 @@ struct DomAdapterState {
    void* host_state = nullptr;
 };
 
-DomAdapterState* dom_adapter_create() { return new DomAdapterState(); }
-void dom_adapter_destroy(DomAdapterState* s) {
-   if (!s) return;
-   if (s->gfx_state) { gfx_state_destroy(s->gfx_state); s->gfx_state = nullptr; }
+DomAdapterState* dom_adapter_create()
+{
+   return new DomAdapterState();
+}
+
+void dom_adapter_destroy(DomAdapterState* s)
+{
+   if (!s)
+      return;
+   if (s->gfx_state) {
+      gfx_state_destroy(s->gfx_state);
+      s->gfx_state = nullptr;
+   }
    s->renderer.reset();
    delete s;
 }
 
-static inline DomAdapterState* state_from(JSContext* ctx) {
+static inline DomAdapterState* state_from(JSContext* ctx)
+{
    return (DomAdapterState*)JS_GetContextOpaque(ctx);
 }
 
@@ -103,15 +113,18 @@ extern "C" void* dom_get_cpp_node_opaque(JSContext* ctx, JSValueConst v)
 static inline std::shared_ptr<Node> get_cpp_node(JSContext* ctx, JSValueConst val)
 {
    auto* st = state_from(ctx);
-   if (!st) return nullptr;
+   if (!st)
+      return nullptr;
    return get_cpp_node(st, ctx, val);
 }
 
 void dom_set_host_state(JSContext* ctx, void* host)
 {
-   if (!ctx) return;
+   if (!ctx)
+      return;
    auto* st = state_from(ctx);
-   if (st) st->host_state = host;
+   if (st)
+      st->host_state = host;
 }
 
 void* dom_get_host_state(JSContext* ctx)
@@ -123,17 +136,21 @@ void* dom_get_host_state(JSContext* ctx)
 GfxStateHandle* dom_gfx_state(JSContext* ctx)
 {
    auto* st = state_from(ctx);
-   if (!st) return nullptr;
-   if (!st->gfx_state) st->gfx_state = gfx_state_create();
+   if (!st)
+      return nullptr;
+   if (!st->gfx_state)
+      st->gfx_state = gfx_state_create();
    return st->gfx_state;
 }
 
 static void js_dom_node_finalizer(JSRuntime* rt, JSValue val)
 {
    auto* st = (DomAdapterState*)JS_GetRuntimeOpaque(rt);
-   if (!st) return;
+   if (!st)
+      return;
    void* ptr = JS_GetOpaque(val, st->dom_node_class_id);
-   if (!ptr) return;
+   if (!ptr)
+      return;
    if (!st->in_dom_cleanup) {
       st->node_wrappers.erase(ptr);
       st->node_registry.erase(ptr);
@@ -151,7 +168,8 @@ static void js_dom_node_finalizer(JSRuntime* rt, JSValue val)
 JSValue wrap_node_js(JSContext* ctx, std::shared_ptr<Node> node)
 {
    auto* st = state_from(ctx);
-   if (!st) return JS_NULL; // state not bound yet
+   if (!st)
+      return JS_NULL; // state not bound yet
    ensure_dom_debug_init(st);
    if (!node)
       return JS_NULL;
@@ -159,8 +177,8 @@ JSValue wrap_node_js(JSContext* ctx, std::shared_ptr<Node> node)
       st->ctx_for_cleanup = ctx;
    void* key = node.get();
    {
-   auto it = st->node_wrappers.find(key);
-   if (it != st->node_wrappers.end()) {
+      auto it = st->node_wrappers.find(key);
+      if (it != st->node_wrappers.end()) {
          return JS_DupValue(ctx, it->second);
       }
    }
@@ -216,8 +234,8 @@ JSValue wrap_node_js(JSContext* ctx, std::shared_ptr<Node> node)
    }
    ++st->wrap_count;
    if (st->dom_debug && (st->wrap_count < 50 || (st->wrap_count % 500) == 0)) {
-   fprintf(stderr, "[DOM] wrap ptr=%p id=%llu wrap_count=%zu wrappers=%zu nodes=%zu\n", key,
-        (unsigned long long)node->debugId, st->wrap_count, st->node_wrappers.size(), st->node_registry.size());
+      fprintf(stderr, "[DOM] wrap ptr=%p id=%llu wrap_count=%zu wrappers=%zu nodes=%zu\n", key,
+              (unsigned long long)node->debugId, st->wrap_count, st->node_wrappers.size(), st->node_registry.size());
    }
    return obj;
 }
@@ -232,7 +250,8 @@ static JSValue js_createElement(JSContext* ctx, JSValueConst this_val, int argc,
    const char* tag = JS_ToCString(ctx, argv[0]);
    auto el = doc->createElement(tag);
    if (auto d = std::dynamic_pointer_cast<dom::Document>(el->ownerDocument.lock())) {
-      for (auto* o : d->observers()) o->onElementCreated(el.get());
+      for (auto* o : d->observers())
+         o->onElementCreated(el.get());
    }
    JS_FreeCString(ctx, tag);
    return wrap_node_js(ctx, el);
@@ -248,7 +267,8 @@ static JSValue js_createElementNS(JSContext* ctx, JSValueConst this_val, int arg
    const char* tag = JS_ToCString(ctx, argv[1]);
    auto el = doc->createElement(tag);
    if (auto d = std::dynamic_pointer_cast<dom::Document>(el->ownerDocument.lock())) {
-      for (auto* o : d->observers()) o->onElementCreated(el.get());
+      for (auto* o : d->observers())
+         o->onElementCreated(el.get());
    }
    JS_FreeCString(ctx, tag);
    return wrap_node_js(ctx, el);
@@ -536,7 +556,8 @@ static JSValue js_setAttribute_with_notify(JSContext* ctx, JSValueConst this_val
    std::string newv = el->getAttribute(name);
    if (name) {
       if (auto d = std::dynamic_pointer_cast<dom::Document>(el->ownerDocument.lock())) {
-         for (auto* o : d->observers()) o->onAttributeChanged(el.get(), name, oldv, newv);
+         for (auto* o : d->observers())
+            o->onAttributeChanged(el.get(), name, oldv, newv);
       }
    }
    JS_FreeCString(ctx, name);
@@ -583,7 +604,8 @@ static JSValue js_appendChild(JSContext* ctx, JSValueConst this_val, int argc, J
    n->appendChild(c);
    if (n->nodeType == dom::NodeType::ELEMENT)
       if (auto d = std::dynamic_pointer_cast<dom::Document>(n->ownerDocument.lock())) {
-         for (auto* o : d->observers()) o->onChildListChanged(std::static_pointer_cast<Element>(n).get());
+         for (auto* o : d->observers())
+            o->onChildListChanged(std::static_pointer_cast<Element>(n).get());
       }
    return JS_DupValue(ctx, argv[0]);
 }
@@ -600,7 +622,8 @@ static JSValue js_insertBefore(JSContext* ctx, JSValueConst this_val, int argc, 
    n->insertBefore(nc, rc);
    if (n->nodeType == dom::NodeType::ELEMENT)
       if (auto d = std::dynamic_pointer_cast<dom::Document>(n->ownerDocument.lock())) {
-         for (auto* o : d->observers()) o->onChildListChanged(std::static_pointer_cast<Element>(n).get());
+         for (auto* o : d->observers())
+            o->onChildListChanged(std::static_pointer_cast<Element>(n).get());
       }
    return JS_DupValue(ctx, argv[0]);
 }
@@ -616,11 +639,13 @@ static JSValue js_removeChild(JSContext* ctx, JSValueConst this_val, int argc, J
    n->removeChild(c);
    if (n->nodeType == dom::NodeType::ELEMENT)
       if (auto d = std::dynamic_pointer_cast<dom::Document>(n->ownerDocument.lock())) {
-         for (auto* o : d->observers()) o->onChildListChanged(std::static_pointer_cast<Element>(n).get());
+         for (auto* o : d->observers())
+            o->onChildListChanged(std::static_pointer_cast<Element>(n).get());
       }
    if (c->nodeType == dom::NodeType::ELEMENT)
       if (auto d = std::dynamic_pointer_cast<dom::Document>(c->ownerDocument.lock())) {
-         for (auto* o : d->observers()) o->onElementRemoved(std::static_pointer_cast<Element>(c).get());
+         for (auto* o : d->observers())
+            o->onElementRemoved(std::static_pointer_cast<Element>(c).get());
       }
    return JS_DupValue(ctx, argv[0]);
 }
@@ -637,15 +662,18 @@ static JSValue js_replaceChild(JSContext* ctx, JSValueConst this_val, int argc, 
    n->replaceChild(nc, oc);
    if (n->nodeType == dom::NodeType::ELEMENT)
       if (auto d = std::dynamic_pointer_cast<dom::Document>(n->ownerDocument.lock())) {
-         for (auto* o : d->observers()) o->onChildListChanged(std::static_pointer_cast<Element>(n).get());
+         for (auto* o : d->observers())
+            o->onChildListChanged(std::static_pointer_cast<Element>(n).get());
       }
    if (oc->nodeType == dom::NodeType::ELEMENT)
       if (auto d = std::dynamic_pointer_cast<dom::Document>(oc->ownerDocument.lock())) {
-         for (auto* o : d->observers()) o->onElementRemoved(std::static_pointer_cast<Element>(oc).get());
+         for (auto* o : d->observers())
+            o->onElementRemoved(std::static_pointer_cast<Element>(oc).get());
       }
    if (nc->nodeType == dom::NodeType::ELEMENT)
       if (auto d = std::dynamic_pointer_cast<dom::Document>(nc->ownerDocument.lock())) {
-         for (auto* o : d->observers()) o->onElementCreated(std::static_pointer_cast<Element>(nc).get());
+         for (auto* o : d->observers())
+            o->onElementCreated(std::static_pointer_cast<Element>(nc).get());
       }
    return JS_DupValue(ctx, argv[1]);
 }
@@ -828,9 +856,10 @@ static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val, int 
    auto* st = state_from(ctx);
    auto it = st->element_canvas_ids.find(el.get());
    if (it == st->element_canvas_ids.end()) {
-   id = gfx_create_canvas(dom_gfx_state(ctx), width, height);
+      id = gfx_create_canvas(dom_gfx_state(ctx), width, height);
       st->element_canvas_ids[el.get()] = id;
-   } else {
+   }
+   else {
       id = it->second;
    }
    if (!id)
@@ -851,17 +880,17 @@ static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val, int 
 }
 
 static const MethodDesc kMethods[] = {
-   {"appendChild", js_appendChild, 1},
-   {"insertBefore", js_insertBefore, 2},
-   {"removeChild", js_removeChild, 1},
-   {"replaceChild", js_replaceChild, 2},
-   {"getElementsByTagName", js_getElementsByTagName, 1},
-   {"setAttribute", js_setAttribute_with_notify, 2},
-   {"getAttribute", js_getAttribute, 1},
-   {"removeAttribute", js_removeAttribute, 1},
-   {"addEventListener", js_addEventListener, 2},
-   {"removeEventListener", js_removeEventListener, 2},
-   {"getContext", js_element_getContext, 1},
+    {"appendChild", js_appendChild, 1},
+    {"insertBefore", js_insertBefore, 2},
+    {"removeChild", js_removeChild, 1},
+    {"replaceChild", js_replaceChild, 2},
+    {"getElementsByTagName", js_getElementsByTagName, 1},
+    {"setAttribute", js_setAttribute_with_notify, 2},
+    {"getAttribute", js_getAttribute, 1},
+    {"removeAttribute", js_removeAttribute, 1},
+    {"addEventListener", js_addEventListener, 2},
+    {"removeEventListener", js_removeEventListener, 2},
+    {"getContext", js_element_getContext, 1},
 };
 
 //
@@ -879,7 +908,8 @@ int dom_element_canvas_id(DomAdapterState* st, dom::Element* el, bool createIfMi
       return it->second;
    if (!createIfMissing)
       return 0;
-   if (!st->gfx_state) st->gfx_state = gfx_state_create();
+   if (!st->gfx_state)
+      st->gfx_state = gfx_state_create();
    int id = gfx_create_canvas(st->gfx_state, 64, 64);
    if (id > 0)
       map[el] = id;
@@ -893,13 +923,13 @@ void dom_define_node_proto(DomAdapterState* st, JSContext* ctx)
       JS_NewClassID(rt, &st->dom_node_class_id);
    }
    if (st->class_runtime != rt) {
-         if (!st->dom_class_def_init) {
-            st->dom_node_class_def = JSClassDef{};
-            st->dom_node_class_def.class_name = "DOMNode";
-            st->dom_node_class_def.finalizer = js_dom_node_finalizer;
-            st->dom_class_def_init = true;
-         }
-         JS_NewClass(rt, st->dom_node_class_id, &st->dom_node_class_def);
+      if (!st->dom_class_def_init) {
+         st->dom_node_class_def = JSClassDef{};
+         st->dom_node_class_def.class_name = "DOMNode";
+         st->dom_node_class_def.finalizer = js_dom_node_finalizer;
+         st->dom_class_def_init = true;
+      }
+      JS_NewClass(rt, st->dom_node_class_id, &st->dom_node_class_def);
       st->class_runtime = rt;
    }
    JSValue proto = JS_NewObject(ctx);
@@ -941,14 +971,17 @@ JSValue dom_create_document(DomAdapterState* st, JSContext* ctx)
 void dom_attach_renderer(JSContext* ctx)
 {
    auto* st = state_from(ctx);
-   if (!st) return;
-   if (!st->renderer) st->renderer = std::make_unique<Renderer>();
+   if (!st)
+      return;
+   if (!st->renderer)
+      st->renderer = std::make_unique<Renderer>();
    JSValue global = JS_GetGlobalObject(ctx);
    JSValue document = JS_GetPropertyStr(ctx, global, "document");
    auto node = get_cpp_node(st, ctx, document);
    JS_FreeValue(ctx, document);
    JS_FreeValue(ctx, global);
-   if (!node || node->nodeType != dom::NodeType::DOCUMENT) return;
+   if (!node || node->nodeType != dom::NodeType::DOCUMENT)
+      return;
    if (auto d = std::dynamic_pointer_cast<dom::Document>(node)) {
       d->addObserver(st->renderer.get());
    }
@@ -968,7 +1001,7 @@ void dom_runtime_cleanup(DomAdapterState* st, JSContext* ctx)
    st->node_registry.clear();
    st->in_dom_cleanup = false;
    fprintf(stderr, "[DOM_CLEANUP] after clear wrappers=%zu nodes=%zu\n", st->node_wrappers.size(),
-      st->node_registry.size());
+           st->node_registry.size());
    st->ctx_for_cleanup = nullptr;
    // Extra GC passes to flush any pending finalizers referencing cleared maps
    JSRuntime* rt = JS_GetRuntime(ctx);
@@ -993,7 +1026,7 @@ void dom_adapter_unregister_runtime(DomAdapterState* st, JSRuntime* rt)
       if (getenv("DOM_DEBUG_LOG")) {
          fprintf(stderr, "[DEBUG] dom_adapter: unregister runtime %p (clearing class registration)\n", (void*)rt);
       }
-   st->class_runtime = nullptr;
+      st->class_runtime = nullptr;
    }
 }
 

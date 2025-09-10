@@ -6,7 +6,12 @@
 #include <quickjs.h>
 #include <unordered_map>
 
-struct SkCanvasView { int id; int width; int height; sk_sp<SkSurface> surface; };
+struct SkCanvasView {
+   int id;
+   int width;
+   int height;
+   sk_sp<SkSurface> surface;
+};
 // Per-runtime graphics state handle (opaque to callers)
 struct GfxStateHandle;
 struct DomAdapterState; // from dom_adapter.h (forward decl)
