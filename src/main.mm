@@ -141,6 +141,7 @@ JSContext *g_deferred_ctx = nullptr;
 static JSValue g_deferred_global = JS_UNDEFINED;
 static JSValue g_deferred_document = JS_UNDEFINED;
 static JSValue g_deferred_body = JS_UNDEFINED;
+// No global DomAdapterState; fetch from JSRuntime/JSContext opaque when needed.
 
 // Forward declaration for compositing reuse
 static void perform_composite_and_present(NSImageView *iv,
@@ -158,15 +159,21 @@ static void composite_into_surface(sk_sp<SkSurface> surface, int W, int H) {
   // call)
   if (g_deferred_ctx)
     layout_maybe_run(g_deferred_ctx);
+  // Retrieve adapter state bound to the deferred runtime (for canvas id lookups)
+  DomAdapterState *st_for_canvas = nullptr;
+  if (g_deferred_ctx) {
+    JSRuntime *rt = JS_GetRuntime(g_deferred_ctx);
+    st_for_canvas = (DomAdapterState *)JS_GetRuntimeOpaque(rt);
+  }
   SkCanvas *canvas = surface->getCanvas();
   canvas->clear(SkColorSetARGB(255, 0x20, 0x20, 0x20));
   extern bool gfx_get_size(int id, int *w, int *h);
   extern sk_sp<SkImage> gfx_snapshot(int id);
-  extern int dom_element_canvas_id(dom::Element * el, bool createIfMissing);
+  extern int dom_element_canvas_id(DomAdapterState*, dom::Element * el, bool createIfMissing);
   renderer_for_each_layer([&](RenderLayer *rl) {
     if (!rl || !rl->element)
       return;
-    int id = dom_element_canvas_id(rl->element, false);
+    int id = st_for_canvas ? dom_element_canvas_id(st_for_canvas, rl->element, false) : 0;
     int x = 0, y = 0, w = 0, h = 0;
     if (!layout_get_box(rl->element, x, y, w, h)) {
       // Fallback: if layout omitted this element (e.g. absolute positioned canvases)
@@ -374,6 +381,8 @@ void native_request_composite(JSContext *ctx) {
 @implementation CanvasImageView
 @end
 
+// Adapter state is owned per QuickJS runtime; no globals here.
+
 static void do_runtime_full_cleanup(JSRuntime *rt, JSContext *ctx,
                                     JSValue global, JSValue document,
                                     JSValue body) {
@@ -390,7 +399,8 @@ static void do_runtime_full_cleanup(JSRuntime *rt, JSContext *ctx,
   if (!JS_IsUndefined(global))
     JS_FreeValue(ctx, global);
   JS_RunGC(rt);
-  dom_runtime_cleanup(ctx);
+  if (DomAdapterState *st_rt = (DomAdapterState *)JS_GetRuntimeOpaque(rt))
+    dom_runtime_cleanup(st_rt, ctx);
   JS_RunGC(rt);
   for (int i = 0; i < 3; i++)
     JS_RunGC(rt);
@@ -402,8 +412,12 @@ static void do_runtime_full_cleanup(JSRuntime *rt, JSContext *ctx,
       free((void *)p);
     }
   }
-  dom_adapter_unregister_runtime(rt);
+  DomAdapterState *st_rt = (DomAdapterState *)JS_GetRuntimeOpaque(rt);
+  if (st_rt)
+    dom_adapter_unregister_runtime(st_rt, rt);
   JS_FreeRuntime(rt);
+  if (st_rt)
+    dom_adapter_destroy(st_rt);
   fprintf(stderr, "[DEBUG] (deferred) Cleanup: end\n");
 }
 
@@ -430,12 +444,16 @@ TestResult run_preact_test(const char *test_js, const char *output_html,
       "if (typeof preactHooks !== 'undefined') preact.hooks = preactHooks;";
 
   define_whatwg_globals(ctx);
-  dom_define_node_proto(ctx);
+  DomAdapterState *st = dom_adapter_create();
+  // Bind state to both context and runtime (runtime used by finalizers)
+  JS_SetContextOpaque(ctx, st);
+  JS_SetRuntimeOpaque(rt, st);
+  dom_define_node_proto(st, ctx);
   global = JS_GetGlobalObject(ctx);
-  document = dom_create_document(ctx);
+  document = dom_create_document(st, ctx);
   JS_SetPropertyStr(ctx, global, "document", JS_DupValue(ctx, document));
   // Expose factory methods via adapter helper (internal js_create* now static)
-  dom_attach_document_factories(ctx, document);
+  dom_attach_document_factories(st, ctx, document);
   body = JS_GetPropertyStr(ctx, document, "body");
   JS_SetPropertyStr(ctx, global, "window", JS_DupValue(ctx, global));
   JS_SetPropertyStr(ctx, global, "self", JS_DupValue(ctx, global));
@@ -564,7 +582,7 @@ cleanup:
     const char *disableCleanup = getenv("DOM_DISABLE_CLEANUP");
     if (!disableCleanup || !*disableCleanup) {
       JS_RunGC(rt);
-      dom_runtime_cleanup(ctx);
+      dom_runtime_cleanup(st, ctx);
       JS_RunGC(rt);
     } else {
       fprintf(
@@ -582,8 +600,9 @@ cleanup:
         free((void *)p);
       }
     }
-    dom_adapter_unregister_runtime(rt);
+    dom_adapter_unregister_runtime(st, rt);
     JS_FreeRuntime(rt);
+    dom_adapter_destroy(st);
   }
   FILE *mf = fopen("output/last_run_ok.marker", "w");
   if (mf) {

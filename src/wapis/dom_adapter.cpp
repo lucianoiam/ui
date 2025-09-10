@@ -17,43 +17,46 @@ using dom::Element;
 using dom::Node;
 using dom::Text;
 
-// (anonymous namespace removed to appease indexer; internal linkage preserved via 'static')
+// Instance state (no global mutable data) -------------------------------------------------
+struct DomAdapterState {
+   std::unordered_map<void*, std::shared_ptr<Node>> node_registry;
+   std::unordered_map<void*, JSValue> node_wrappers;
+   std::unordered_map<Element*, int> element_canvas_ids;
+   JSClassID dom_node_class_id = 0;
+   JSRuntime* class_runtime = nullptr;
+   JSContext* ctx_for_cleanup = nullptr;
+   bool in_dom_cleanup = false;
+   bool dom_debug = false;
+   size_t wrap_count = 0;
+   size_t finalize_count = 0;
+};
 
-// Registry to keep C++ DOM nodes alive as long as JS objects exist
-static std::unordered_map<void*, std::shared_ptr<Node>> g_node_registry;
-// Stable JS wrapper per C++ node
-static std::unordered_map<void*, JSValue> g_node_wrappers;
-static JSClassID dom_node_class_id = 0;
-static JSRuntime* g_class_runtime = nullptr;
-// Track context for cleanup (single-context usage assumption)
-static JSContext* g_ctx_for_cleanup = nullptr;
-// Guard for explicit cleanup phase
-static bool g_in_dom_cleanup = false;
-static bool g_dom_debug = false;
-static size_t g_wrap_count = 0;
-static size_t g_finalize_count = 0;
-// Map each Element* to an associated Skia canvas id (created lazily on first getContext call)
-static std::unordered_map<Element*, int> g_element_canvas_ids; // stays internal; accessor provided outside namespace
+DomAdapterState* dom_adapter_create() { return new DomAdapterState(); }
+void dom_adapter_destroy(DomAdapterState* s) { delete s; }
 
-static void ensure_dom_debug_init()
+static inline DomAdapterState* state_from(JSContext* ctx) {
+   return (DomAdapterState*)JS_GetContextOpaque(ctx);
+}
+
+static void ensure_dom_debug_init(DomAdapterState* st)
 {
    static bool inited = false;
    if (!inited) {
       inited = true;
       const char* e = std::getenv("DOM_DEBUG_LOG");
-      if (e && *e)
-         g_dom_debug = true;
+   if (e && *e)
+      st->dom_debug = true;
    }
 }
 
-static std::shared_ptr<Node> get_cpp_node(JSContext* ctx, JSValueConst val)
+static std::shared_ptr<Node> get_cpp_node(DomAdapterState* st, JSContext* ctx, JSValueConst val)
 {
-   void* ptr = JS_GetOpaque2(ctx, val, dom_node_class_id);
+   void* ptr = JS_GetOpaque2(ctx, val, st->dom_node_class_id);
    if (!ptr)
       return nullptr;
-   auto it = g_node_registry.find(ptr);
-   if (it != g_node_registry.end()) {
-      if (g_dom_debug) {
+   auto it = st->node_registry.find(ptr);
+   if (it != st->node_registry.end()) {
+      if (st->dom_debug) {
          JSValue idv = JS_GetPropertyStr(ctx, (JSValue)val, "__id");
          if (!JS_IsException(idv)) {
             int64_t jsid = 0;
@@ -67,7 +70,7 @@ static std::shared_ptr<Node> get_cpp_node(JSContext* ctx, JSValueConst val)
       }
       return it->second;
    }
-   if (g_dom_debug)
+   if (st->dom_debug)
       fprintf(stderr, "[DOM] get_cpp_node: stale opaque=%p (wrapper missing in registry)\n", ptr);
    return nullptr;
 }
@@ -75,53 +78,65 @@ static std::shared_ptr<Node> get_cpp_node(JSContext* ctx, JSValueConst val)
 // Expose minimal accessor for internal subsystems (layout, etc.) without leaking other internals
 extern "C" void* dom_get_cpp_node_opaque(JSContext* ctx, JSValueConst v)
 {
-   auto sp = get_cpp_node(ctx, v);
+   auto* st = state_from(ctx);
+   auto sp = get_cpp_node(st, ctx, v);
    return sp.get();
+}
+
+// Backward compatibility wrapper: allow existing code using get_cpp_node(ctx, val)
+static inline std::shared_ptr<Node> get_cpp_node(JSContext* ctx, JSValueConst val)
+{
+   auto* st = state_from(ctx);
+   if (!st) return nullptr;
+   return get_cpp_node(st, ctx, val);
 }
 
 static void js_dom_node_finalizer(JSRuntime* rt, JSValue val)
 {
-   void* ptr = JS_GetOpaque(val, dom_node_class_id);
-   if (ptr) {
-      if (!g_in_dom_cleanup) {
-         g_node_wrappers.erase(ptr);
-         g_node_registry.erase(ptr);
-      }
-      ++g_finalize_count;
-      if (g_dom_debug && (g_finalize_count < 50 || (g_finalize_count % 500) == 0)) {
-         fprintf(stderr, "[DOM] finalizer ptr=%p finalize_count=%zu wrappers=%zu nodes=%zu in_cleanup=%d\n", ptr,
-                 g_finalize_count, g_node_wrappers.size(), g_node_registry.size(), (int)g_in_dom_cleanup);
-      }
+   auto* st = (DomAdapterState*)JS_GetRuntimeOpaque(rt);
+   if (!st) return;
+   void* ptr = JS_GetOpaque(val, st->dom_node_class_id);
+   if (!ptr) return;
+   if (!st->in_dom_cleanup) {
+      st->node_wrappers.erase(ptr);
+      st->node_registry.erase(ptr);
+   }
+   ++st->finalize_count;
+   if (st->dom_debug && (st->finalize_count < 50 || (st->finalize_count % 500) == 0)) {
+      fprintf(stderr, "[DOM] finalizer ptr=%p finalize_count=%zu wrappers=%zu nodes=%zu in_cleanup=%d\n", ptr,
+              st->finalize_count, st->node_wrappers.size(), st->node_registry.size(), (int)st->in_dom_cleanup);
    }
 }
 
 static JSClassDef dom_node_class = {
-   "DOMNode",           // class_name
-   js_dom_node_finalizer, // finalizer
-   nullptr,               // gc_mark
-   nullptr,               // call
-   nullptr                // exotic
+   "DOMNode",
+   js_dom_node_finalizer,
+   nullptr,
+   nullptr,
+   nullptr
 };
 
 // Wrap a C++ DOM node (stable identity)
 JSValue wrap_node_js(JSContext* ctx, std::shared_ptr<Node> node)
 {
-   ensure_dom_debug_init();
+   auto* st = state_from(ctx);
+   if (!st) return JS_NULL; // state not bound yet
+   ensure_dom_debug_init(st);
    if (!node)
       return JS_NULL;
-   if (!g_ctx_for_cleanup)
-      g_ctx_for_cleanup = ctx;
+   if (!st->ctx_for_cleanup)
+      st->ctx_for_cleanup = ctx;
    void* key = node.get();
    {
-      auto it = g_node_wrappers.find(key);
-      if (it != g_node_wrappers.end()) {
+   auto it = st->node_wrappers.find(key);
+   if (it != st->node_wrappers.end()) {
          return JS_DupValue(ctx, it->second);
       }
    }
-   JSValue obj = JS_NewObjectClass(ctx, dom_node_class_id);
+   JSValue obj = JS_NewObjectClass(ctx, st->dom_node_class_id);
    JS_SetOpaque(obj, key);
-   g_node_registry[key] = node;
-   g_node_wrappers[key] = JS_DupValue(ctx, obj);
+   st->node_registry[key] = node;
+   st->node_wrappers[key] = JS_DupValue(ctx, obj);
    // Hidden debug id property
    JS_DefinePropertyValueStr(ctx, obj, "__id", JS_NewInt64(ctx, (int64_t)node->debugId), JS_PROP_WRITABLE);
    if (node->nodeType == dom::NodeType::ELEMENT) {
@@ -168,10 +183,10 @@ JSValue wrap_node_js(JSContext* ctx, std::shared_ptr<Node> node)
       JS_FreeAtom(ctx, cssAt);
       JS_SetPropertyStr(ctx, obj, "style", style);
    }
-   ++g_wrap_count;
-   if (g_dom_debug && (g_wrap_count < 50 || (g_wrap_count % 500) == 0)) {
-      fprintf(stderr, "[DOM] wrap ptr=%p id=%llu wrap_count=%zu wrappers=%zu nodes=%zu\n", key,
-              (unsigned long long)node->debugId, g_wrap_count, g_node_wrappers.size(), g_node_registry.size());
+   ++st->wrap_count;
+   if (st->dom_debug && (st->wrap_count < 50 || (st->wrap_count % 500) == 0)) {
+   fprintf(stderr, "[DOM] wrap ptr=%p id=%llu wrap_count=%zu wrappers=%zu nodes=%zu\n", key,
+        (unsigned long long)node->debugId, st->wrap_count, st->node_wrappers.size(), st->node_registry.size());
    }
    return obj;
 }
@@ -759,13 +774,14 @@ static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val, int 
    if (hDecl > 0)
       height = hDecl;
    int id;
-   auto it = g_element_canvas_ids.find(el.get());
-   if (it == g_element_canvas_ids.end()) {
+   auto* st = state_from(ctx);
+   auto it = st->element_canvas_ids.find(el.get());
+   if (it == st->element_canvas_ids.end()) {
       id = gfx_create_canvas(width, height);
-      g_element_canvas_ids[el.get()] = id;
-   }
-   else
+      st->element_canvas_ids[el.get()] = id;
+   } else {
       id = it->second;
+   }
    if (!id)
       return JS_NULL;
    if (js_canvas_ctx2d_class_id == 0) {
@@ -809,30 +825,31 @@ static void __dom_adapter_indexer_sentinel__() {}
 static int __dom_adapter_namespace_anchor = 0;
 
 // Public accessor for element-associated canvas id
-int dom_element_canvas_id(dom::Element* el, bool createIfMissing)
+int dom_element_canvas_id(DomAdapterState* st, dom::Element* el, bool createIfMissing)
 {
    if (!el)
       return 0;
-   auto it = g_element_canvas_ids.find(el);
-   if (it != g_element_canvas_ids.end())
+   auto& map = st->element_canvas_ids;
+   auto it = map.find(el);
+   if (it != map.end())
       return it->second;
    if (!createIfMissing)
       return 0;
    int id = gfx_create_canvas(64, 64);
    if (id > 0)
-      g_element_canvas_ids[el] = id;
+      map[el] = id;
    return id;
 }
 
-void dom_define_node_proto(JSContext* ctx)
+void dom_define_node_proto(DomAdapterState* st, JSContext* ctx)
 {
    JSRuntime* rt = JS_GetRuntime(ctx);
-   if (dom_node_class_id == 0) {
-      JS_NewClassID(rt, &dom_node_class_id);
+   if (st->dom_node_class_id == 0) {
+      JS_NewClassID(rt, &st->dom_node_class_id);
    }
-   if (g_class_runtime != rt) {
-      JS_NewClass(rt, dom_node_class_id, &dom_node_class);
-      g_class_runtime = rt;
+   if (st->class_runtime != rt) {
+      JS_NewClass(rt, st->dom_node_class_id, &dom_node_class);
+      st->class_runtime = rt;
    }
    JSValue proto = JS_NewObject(ctx);
    for (const auto& pd : kPropGetSet) {
@@ -846,21 +863,21 @@ void dom_define_node_proto(JSContext* ctx)
       JS_DefinePropertyValueStr(ctx, proto, md.name, JS_NewCFunction(ctx, md.fn, md.name, md.length),
                                 JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
    }
-   JS_SetClassProto(ctx, dom_node_class_id, proto);
+   JS_SetClassProto(ctx, st->dom_node_class_id, proto);
 }
 
-JSValue dom_make_node(JSContext* ctx, const char*, int, JSValue)
+JSValue dom_make_node(DomAdapterState*, JSContext* ctx, const char*, int, JSValue)
 {
    return JS_NULL;
 }
 
-JSValue dom_create_document(JSContext* ctx)
+JSValue dom_create_document(DomAdapterState* st, JSContext* ctx)
 {
-   if (g_ctx_for_cleanup && g_ctx_for_cleanup != ctx) {
-      g_in_dom_cleanup = true;
-      g_node_wrappers.clear();
-      g_node_registry.clear();
-      g_in_dom_cleanup = false;
+   if (st->ctx_for_cleanup && st->ctx_for_cleanup != ctx) {
+      st->in_dom_cleanup = true;
+      st->node_wrappers.clear();
+      st->node_registry.clear();
+      st->in_dom_cleanup = false;
    }
    auto doc = dom::createDocument();
    JSValue js_doc = wrap_node_js(ctx, doc);
@@ -870,30 +887,30 @@ JSValue dom_create_document(JSContext* ctx)
    return js_doc;
 }
 
-void dom_runtime_cleanup(JSContext* ctx)
+void dom_runtime_cleanup(DomAdapterState* st, JSContext* ctx)
 {
-   fprintf(stderr, "[DOM_CLEANUP] wrappers=%zu nodes=%zu\n", g_node_wrappers.size(), g_node_registry.size());
-   g_in_dom_cleanup = true;
+   fprintf(stderr, "[DOM_CLEANUP] wrappers=%zu nodes=%zu\n", st->node_wrappers.size(), st->node_registry.size());
+   st->in_dom_cleanup = true;
    std::vector<JSValue> to_free;
-   to_free.reserve(g_node_wrappers.size());
-   for (auto& p : g_node_wrappers)
+   to_free.reserve(st->node_wrappers.size());
+   for (auto& p : st->node_wrappers)
       to_free.push_back(p.second);
    for (auto& v : to_free)
       JS_FreeValue(ctx, v);
-   g_node_wrappers.clear();
-   g_node_registry.clear();
-   g_in_dom_cleanup = false;
-   fprintf(stderr, "[DOM_CLEANUP] after clear wrappers=%zu nodes=%zu\n", g_node_wrappers.size(),
-           g_node_registry.size());
-   g_ctx_for_cleanup = nullptr;
+   st->node_wrappers.clear();
+   st->node_registry.clear();
+   st->in_dom_cleanup = false;
+   fprintf(stderr, "[DOM_CLEANUP] after clear wrappers=%zu nodes=%zu\n", st->node_wrappers.size(),
+      st->node_registry.size());
+   st->ctx_for_cleanup = nullptr;
    // Extra GC passes to flush any pending finalizers referencing cleared maps
    JSRuntime* rt = JS_GetRuntime(ctx);
    for (int i = 0; i < 3; i++)
       JS_RunGC(rt);
-   if (g_dom_debug)
-      fprintf(stderr, "[DOM] totals wrap=%zu finalize=%zu (post-GC)\n", g_wrap_count, g_finalize_count);
-   if (g_dom_debug && !g_node_wrappers.empty()) {
-      fprintf(stderr, "[DOM][WARN] wrappers not empty after cleanup: %zu\n", g_node_wrappers.size());
+   if (st->dom_debug)
+      fprintf(stderr, "[DOM] totals wrap=%zu finalize=%zu (post-GC)\n", st->wrap_count, st->finalize_count);
+   if (st->dom_debug && !st->node_wrappers.empty()) {
+      fprintf(stderr, "[DOM][WARN] wrappers not empty after cleanup: %zu\n", st->node_wrappers.size());
    }
 }
 
@@ -903,24 +920,24 @@ void dom_runtime_cleanup(JSContext* ctx)
 // re-definition for a new runtime that happens to have a different address
 // (or worse, reuse a stale pointer leading to UAF if some delayed finalizer
 // touches g_class_runtime). Call this after JS_FreeContext/JS_FreeRuntime.
-void dom_adapter_unregister_runtime(JSRuntime* rt)
+void dom_adapter_unregister_runtime(DomAdapterState* st, JSRuntime* rt)
 {
-   if (g_class_runtime == rt) {
+   if (st->class_runtime == rt) {
       if (getenv("DOM_DEBUG_LOG")) {
          fprintf(stderr, "[DEBUG] dom_adapter: unregister runtime %p (clearing class registration)\n", (void*)rt);
       }
-      g_class_runtime = nullptr;
+   st->class_runtime = nullptr;
    }
 }
 
-int dom_define_core(JSContext* ctx)
+int dom_define_core(DomAdapterState* st, JSContext* ctx)
 {
-   dom_define_node_proto(ctx);
+   dom_define_node_proto(st, ctx);
    return 0;
 }
 
 // Attach document factory methods (internal API now that js_create* are static)
-void dom_attach_document_factories(JSContext* ctx, JSValue document)
+void dom_attach_document_factories(DomAdapterState*, JSContext* ctx, JSValue document)
 {
    JS_SetPropertyStr(ctx, document, "createElement", JS_NewCFunction(ctx, js_createElement, "createElement", 1));
    JS_SetPropertyStr(ctx, document, "createElementNS", JS_NewCFunction(ctx, js_createElementNS, "createElementNS", 2));
