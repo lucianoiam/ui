@@ -9,6 +9,7 @@ struct GfxStateHandle {
    std::mutex mtx;
    int next_id = 1;
    std::unordered_map<int, SkCanvasView> views;
+   float device_scale = 1.0f;
 };
 
 GfxStateHandle* gfx_state_create()
@@ -34,12 +35,20 @@ int gfx_create_canvas(GfxStateHandle* gs, int width, int height)
    if (!gs || width <= 0 || height <= 0)
       return -1;
    std::lock_guard<std::mutex> lock(gs->mtx);
-   SkImageInfo info = SkImageInfo::Make(width, height, kN32_SkColorType, kPremul_SkAlphaType);
+   // Allocate backing surface in device pixels, but draw in logical units by scaling the canvas.
+   const float s = gs->device_scale <= 0.f ? 1.f : gs->device_scale;
+   const int pw = (int)std::lround(width * s);
+   const int ph = (int)std::lround(height * s);
+   SkImageInfo info = SkImageInfo::Make(pw, ph, kN32_SkColorType, kPremul_SkAlphaType);
    sk_sp<SkSurface> surface = SkSurfaces::Raster(info);
    if (!surface)
       return -1;
    int id = gs->next_id++;
    gs->views[id] = {id, width, height, surface};
+   // Ensure drawing commands use logical coordinates (points)
+   if (SkCanvas* c = surface->getCanvas()) {
+      if (s != 1.f) c->scale(s, s);
+   }
    return id;
 }
 
@@ -98,6 +107,39 @@ bool gfx_get_size(GfxStateHandle* gs, int id, int* outW, int* outH)
    if (outH)
       *outH = it->second.height;
    return true;
+}
+
+void gfx_set_device_scale(GfxStateHandle* gs, float scale)
+{
+   if (!gs)
+      return;
+   std::lock_guard<std::mutex> lock(gs->mtx);
+   float s = (scale > 0.f) ? scale : 1.f;
+   if (std::abs(gs->device_scale - s) < 1e-6f) {
+      gs->device_scale = s;
+      return;
+   }
+   // Update scale for future draws without discarding existing content.
+   // Existing pixels remain at their previous resolution until redrawn.
+   gs->device_scale = s;
+   for (auto& kv : gs->views) {
+      SkCanvasView& v = kv.second;
+      if (v.surface) {
+         if (SkCanvas* c = v.surface->getCanvas()) {
+            c->resetMatrix();
+            if (s != 1.f)
+               c->scale(s, s);
+         }
+      }
+   }
+}
+
+float gfx_get_device_scale(GfxStateHandle* gs)
+{
+   if (!gs)
+      return 1.f;
+   std::lock_guard<std::mutex> lock(gs->mtx);
+   return gs->device_scale;
 }
 
 // JS binding helpers: fetch per-context state from DomAdapterState

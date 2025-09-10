@@ -23,6 +23,10 @@ void gfx_fill_circle(GfxStateHandle* gs, int id, int cx, int cy, int radius, uin
 sk_sp<SkImage> gfx_snapshot(GfxStateHandle* gs, int id);
 bool gfx_get_size(GfxStateHandle* gs, int id, int* outW, int* outH);
 
+// Device scale control (logical -> device pixels). Default is 1.0.
+void gfx_set_device_scale(GfxStateHandle* gs, float scale);
+float gfx_get_device_scale(GfxStateHandle* gs);
+
 // JS bindings installer; resolved per-context, routes through DomAdapterState's GfxStateHandle.
 void gfx_install_js(JSContext* ctx);
 

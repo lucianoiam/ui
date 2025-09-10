@@ -21,6 +21,7 @@
 #import <Cocoa/Cocoa.h>
 #include <include/core/SkCanvas.h>
 #include <include/core/SkImage.h>
+#include <include/core/SkSamplingOptions.h>
 #include <include/core/SkSurface.h>
 #include <lexbor/html/html.h>
 #include <memory>
@@ -142,13 +143,6 @@ static JSValue g_deferred_body = JS_UNDEFINED;
 // DomAdapterState is owned per QuickJS runtime.
 
 // Forward declaration for compositing reuse
-static void perform_composite_and_present(NSImageView* iv, sk_sp<SkSurface> surface, int W, int H, NSWindow* window);
-static NSImageView* g_canvasImageView = nil;
-static sk_sp<SkSurface> g_windowSurface;
-int g_winW = VIEWPORT_DEFAULT_WIDTH,
-    g_winH = VIEWPORT_DEFAULT_HEIGHT; // single initialization point
-
-// Resolve the current Renderer by scanning the Document's observers from the JSContext.
 static Renderer* renderer_from_ctx(JSContext* ctx)
 {
    if (!ctx)
@@ -169,6 +163,10 @@ static Renderer* renderer_from_ctx(JSContext* ctx)
    return nullptr;
 }
 
+static NSImageView* g_canvasImageView = nil;
+static sk_sp<SkSurface> g_windowSurface;
+int g_winW = VIEWPORT_DEFAULT_WIDTH,
+    g_winH = VIEWPORT_DEFAULT_HEIGHT;
 static void composite_into_surface(sk_sp<SkSurface> surface, int W, int H)
 {
    if (!surface)
@@ -185,6 +183,12 @@ static void composite_into_surface(sk_sp<SkSurface> surface, int W, int H)
       // Fetch per-context graphics state owned by the adapter
       extern GfxStateHandle* dom_gfx_state(JSContext * ctx);
       gs = dom_gfx_state(g_deferred_ctx);
+   }
+   // Device scale for device-pixel compositing
+   float deviceScale = 1.0f;
+   if (g_deferred_ctx) {
+      deviceScale = dom_get_display_scale(g_deferred_ctx);
+      if (deviceScale <= 0.f) deviceScale = 1.0f;
    }
    SkCanvas* canvas = surface->getCanvas();
    canvas->clear(SkColorSetARGB(255, 0x20, 0x20, 0x20));
@@ -217,24 +221,12 @@ static void composite_into_surface(sk_sp<SkSurface> surface, int W, int H)
          int fy = get_px("top", -1);
          int fw = get_px("width", -1);
          int fh = get_px("height", -1);
-         if (fx >= 0) {
-            x = fx;
-         }
-         if (fy >= 0) {
-            y = fy;
-         }
-         if (fw > 0) {
-            w = fw;
-         }
-         if (fh > 0) {
-            h = fh;
-         }
-         if (w <= 0) {
-            w = 50;
-         }
-         if (h <= 0) {
-            h = 50;
-         }
+         if (fx >= 0) x = fx;
+         if (fy >= 0) y = fy;
+         if (fw > 0) w = fw;
+         if (fh > 0) h = fh;
+         if (w <= 0) w = 50;
+         if (h <= 0) h = 50;
       }
       // Override with absolute positioning if explicitly styled.
       const std::string& style_override = rl->element->styleCssText;
@@ -252,20 +244,15 @@ static void composite_into_surface(sk_sp<SkSurface> surface, int W, int H)
          };
          int lx = get_px2("left", -1);
          int ty = get_px2("top", -1);
-         if (lx >= 0) {
-            x = lx;
-         }
-         if (ty >= 0) {
-            y = ty;
-         }
+         if (lx >= 0) x = lx;
+         if (ty >= 0) y = ty;
       }
       // Draw background color if present even without canvas surface
       const std::string& st = rl->element->styleCssText;
       SkColor bg = 0;
       auto d3 = css::parse_inline(st);
       auto itBg = d3.kv.find("background-color");
-      if (itBg == d3.kv.end())
-         itBg = d3.kv.find("background");
+      if (itBg == d3.kv.end()) itBg = d3.kv.find("background");
       if (itBg != d3.kv.end()) {
          int rr = 0, gg = 0, bb = 0;
          if (css::parse_rgb_color(itBg->second, rr, gg, bb)) {
@@ -276,18 +263,23 @@ static void composite_into_surface(sk_sp<SkSurface> surface, int W, int H)
          SkPaint p;
          p.setStyle(SkPaint::kFill_Style);
          p.setColor(bg);
-         canvas->drawRect(SkRect::MakeXYWH(x, y, w, h), p);
+         canvas->drawRect(SkRect::MakeXYWH((SkScalar)(x * deviceScale), (SkScalar)(y * deviceScale),
+                                           (SkScalar)(w * deviceScale), (SkScalar)(h * deviceScale)),
+                          p);
       }
       if (id) {
          auto img = gfx_snapshot(gs, id);
          if (img) {
-            canvas->drawImage(img.get(), (SkScalar)x, (SkScalar)y);
+            // Draw snapshot at device pixel position; image size already matches device pixels of the canvas.
+            canvas->drawImage(img.get(), (SkScalar)(x * deviceScale), (SkScalar)(y * deviceScale));
             if (getenv("DEBUG_DRAW_BORDER")) {
                SkPaint border;
                border.setStyle(SkPaint::kStroke_Style);
                border.setColor(SK_ColorWHITE);
                border.setStrokeWidth(1);
-               canvas->drawRect(SkRect::MakeXYWH(x, y, w, h), border);
+               canvas->drawRect(SkRect::MakeXYWH((SkScalar)(x * deviceScale), (SkScalar)(y * deviceScale),
+                                                 (SkScalar)(w * deviceScale), (SkScalar)(h * deviceScale)),
+                                border);
             }
          }
       }
@@ -412,6 +404,20 @@ TestResult run_preact_test(const char* test_js, const char* output_html, const c
    // Bind state to both context and runtime (runtime used by finalizers)
    JS_SetContextOpaque(ctx, st.get());
    JS_SetRuntimeOpaque(rt, st.get());
+   // Initialize per-context device scale before any canvases are created (crisp rendering on high-DPI)
+   {
+      float scale = 1.0f;
+#ifdef __APPLE__
+      @autoreleasepool {
+         NSScreen* ms = [NSScreen mainScreen];
+         if (ms) {
+            CGFloat s = [ms backingScaleFactor];
+            if (s > 0) scale = (float)s;
+         }
+      }
+#endif
+      dom_set_display_scale(ctx, scale);
+   }
    dom_define_node_proto(st.get(), ctx);
    global = JS_GetGlobalObject(ctx);
    document = dom_create_document(st.get(), ctx);
@@ -745,13 +751,29 @@ int main(int argc, char** argv)
       [window makeKeyAndOrderFront:nil];
       [NSApp activateIgnoringOtherApps:YES];
 
-      // Create an NSImageView backed by a bitmap we paint into via Skia (now
-      // storing globals for incremental recomposite)
+      // Create an NSImageView backed by a bitmap we paint into via Skia.
       g_winW = VIEWPORT_DEFAULT_WIDTH;
       g_winH = VIEWPORT_DEFAULT_HEIGHT;
-      SkImageInfo info = SkImageInfo::Make(g_winW, g_winH, kN32_SkColorType, kPremul_SkAlphaType);
+      // Determine device scale from the window for crisp rendering.
+      CGFloat scale = [[window screen] backingScaleFactor];
+      if (scale <= 0) scale = 1.0;
+      // Inform adapter per-context state so all canvases allocate at device pixels.
+      if (g_deferred_ctx) {
+         extern void dom_set_display_scale(JSContext * ctx, float scale);
+         dom_set_display_scale(g_deferred_ctx, (float)scale);
+      }
+      // Create window surface in device pixels, draw in logical coords by scaling canvas.
+      const int pw = (int)llround(g_winW * scale);
+      const int ph = (int)llround(g_winH * scale);
+      SkImageInfo info = SkImageInfo::Make(pw, ph, kN32_SkColorType, kPremul_SkAlphaType);
       g_windowSurface = SkSurfaces::Raster(info);
+   // Do not scale the window canvas; surfaces are created in device pixels and compositing uses logical coords.
       g_canvasImageView = (NSImageView*)[[InputImageView alloc] initWithFrame:frame];
+      // Ensure view/layer present at correct scale
+      if ([g_canvasImageView respondsToSelector:@selector(setWantsLayer:)]) {
+         [g_canvasImageView setWantsLayer:YES];
+         if (g_canvasImageView.layer) g_canvasImageView.layer.contentsScale = scale;
+      }
       if (g_windowSurface && g_canvasImageView) {
          composite_into_surface(g_windowSurface, g_winW, g_winH);
          present_surface(g_canvasImageView, g_windowSurface, g_winW, g_winH);

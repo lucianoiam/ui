@@ -40,6 +40,9 @@ int dom_element_canvas_id(DomAdapterState*, dom::Element* el, bool createIfMissi
 extern "C" void* dom_get_cpp_node_opaque(JSContext* ctx, JSValueConst v);
 // Access per-context graphics state (owned by DomAdapterState)
 GfxStateHandle* dom_gfx_state(JSContext* ctx);
+// Cross-platform display scale storage per-context (used by renderer to allocate in device pixels)
+void dom_set_display_scale(JSContext* ctx, float scale);
+float dom_get_display_scale(JSContext* ctx);
 // Opaque host state pointer storage (per-context); lifetime owned by the host
 void dom_set_host_state(JSContext* ctx, void* host);
 void* dom_get_host_state(JSContext* ctx);

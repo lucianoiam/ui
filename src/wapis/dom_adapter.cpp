@@ -143,6 +143,21 @@ GfxStateHandle* dom_gfx_state(JSContext* ctx)
    return st->gfx_state;
 }
 
+void dom_set_display_scale(JSContext* ctx, float scale)
+{
+   if (!ctx)
+      return;
+   GfxStateHandle* gs = dom_gfx_state(ctx);
+   if (gs)
+      gfx_set_device_scale(gs, scale);
+}
+
+float dom_get_display_scale(JSContext* ctx)
+{
+   GfxStateHandle* gs = dom_gfx_state(ctx);
+   return gs ? gfx_get_device_scale(gs) : 1.f;
+}
+
 static void js_dom_node_finalizer(JSRuntime* rt, JSValue val)
 {
    auto* st = (DomAdapterState*)JS_GetRuntimeOpaque(rt);
