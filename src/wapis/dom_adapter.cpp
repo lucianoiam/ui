@@ -27,8 +27,13 @@ struct DomAdapterState {
    JSContext* ctx_for_cleanup = nullptr;
    bool in_dom_cleanup = false;
    bool dom_debug = false;
+      bool debug_checked = false;
    size_t wrap_count = 0;
    size_t finalize_count = 0;
+      // Class definitions/ids stored per-instance (no static globals)
+      JSClassDef dom_node_class_def{};
+      bool dom_class_def_init = false;
+      JSClassID canvas_ctx2d_class_id = 0;
 };
 
 DomAdapterState* dom_adapter_create() { return new DomAdapterState(); }
@@ -40,12 +45,11 @@ static inline DomAdapterState* state_from(JSContext* ctx) {
 
 static void ensure_dom_debug_init(DomAdapterState* st)
 {
-   static bool inited = false;
-   if (!inited) {
-      inited = true;
+   if (!st->debug_checked) {
+      st->debug_checked = true;
       const char* e = std::getenv("DOM_DEBUG_LOG");
-   if (e && *e)
-      st->dom_debug = true;
+      if (e && *e)
+         st->dom_debug = true;
    }
 }
 
@@ -108,13 +112,7 @@ static void js_dom_node_finalizer(JSRuntime* rt, JSValue val)
    }
 }
 
-static JSClassDef dom_node_class = {
-   "DOMNode",
-   js_dom_node_finalizer,
-   nullptr,
-   nullptr,
-   nullptr
-};
+// Per-instance class def lives inside DomAdapterState; finalized when registering
 
 // Wrap a C++ DOM node (stable identity)
 JSValue wrap_node_js(JSContext* ctx, std::shared_ptr<Node> node)
@@ -692,8 +690,6 @@ struct JSCanvasContext2D {
    int canvasId;
 };
 
-static JSClassID js_canvas_ctx2d_class_id = 0;
-
 static JSValue js_ctx_fillRect(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
    if (argc < 5)
@@ -705,7 +701,8 @@ static JSValue js_ctx_fillRect(JSContext* ctx, JSValueConst this_val, int argc, 
    JS_ToInt32(ctx, &w, argv[2]);
    JS_ToInt32(ctx, &h, argv[3]);
    JS_ToInt64(ctx, &color, argv[4]);
-   JSCanvasContext2D* c2d = (JSCanvasContext2D*)JS_GetOpaque2(ctx, this_val, js_canvas_ctx2d_class_id);
+   auto* stc = state_from(ctx);
+   JSCanvasContext2D* c2d = (JSCanvasContext2D*)JS_GetOpaque2(ctx, this_val, stc ? stc->canvas_ctx2d_class_id : 0);
    if (c2d)
       gfx_fill_rect(c2d->canvasId, x, y, w, h, (uint32_t)color);
    return JS_UNDEFINED;
@@ -722,7 +719,8 @@ static JSValue js_ctx_fillCircle(JSContext* ctx, JSValueConst this_val, int argc
    JS_ToInt32(ctx, &r, argv[2]);
    if (argc >= 4)
       JS_ToInt64(ctx, &color, argv[3]);
-   JSCanvasContext2D* c2d = (JSCanvasContext2D*)JS_GetOpaque2(ctx, this_val, js_canvas_ctx2d_class_id);
+   auto* stc = state_from(ctx);
+   JSCanvasContext2D* c2d = (JSCanvasContext2D*)JS_GetOpaque2(ctx, this_val, stc ? stc->canvas_ctx2d_class_id : 0);
    if (c2d)
       gfx_fill_circle(c2d->canvasId, cx, cy, r, (uint32_t)color);
    return JS_UNDEFINED;
@@ -784,13 +782,13 @@ static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val, int 
    }
    if (!id)
       return JS_NULL;
-   if (js_canvas_ctx2d_class_id == 0) {
-      JS_NewClassID(JS_GetRuntime(ctx), &js_canvas_ctx2d_class_id);
+   if (st->canvas_ctx2d_class_id == 0) {
+      JS_NewClassID(JS_GetRuntime(ctx), &st->canvas_ctx2d_class_id);
       JSClassDef def{};
       def.class_name = "CanvasRenderingContext2D";
-      JS_NewClass(JS_GetRuntime(ctx), js_canvas_ctx2d_class_id, &def);
+      JS_NewClass(JS_GetRuntime(ctx), st->canvas_ctx2d_class_id, &def);
    }
-   JSValue ctxObj = JS_NewObjectClass(ctx, js_canvas_ctx2d_class_id);
+   JSValue ctxObj = JS_NewObjectClass(ctx, st->canvas_ctx2d_class_id);
    auto* c2d = (JSCanvasContext2D*)js_mallocz(ctx, sizeof(JSCanvasContext2D));
    c2d->canvasId = id;
    JS_SetOpaque(ctxObj, c2d);
@@ -821,8 +819,7 @@ static void __dom_adapter_indexer_sentinel__() {}
 #endif
 // -------------------------------------------------------------------------------
 
-// Dummy anchor (kept for any indexer heuristics)
-static int __dom_adapter_namespace_anchor = 0;
+// (removed dummy anchor to avoid any global/static data)
 
 // Public accessor for element-associated canvas id
 int dom_element_canvas_id(DomAdapterState* st, dom::Element* el, bool createIfMissing)
@@ -848,7 +845,13 @@ void dom_define_node_proto(DomAdapterState* st, JSContext* ctx)
       JS_NewClassID(rt, &st->dom_node_class_id);
    }
    if (st->class_runtime != rt) {
-      JS_NewClass(rt, st->dom_node_class_id, &dom_node_class);
+         if (!st->dom_class_def_init) {
+            st->dom_node_class_def = JSClassDef{};
+            st->dom_node_class_def.class_name = "DOMNode";
+            st->dom_node_class_def.finalizer = js_dom_node_finalizer;
+            st->dom_class_def_init = true;
+         }
+         JS_NewClass(rt, st->dom_node_class_id, &st->dom_node_class_def);
       st->class_runtime = rt;
    }
    JSValue proto = JS_NewObject(ctx);
