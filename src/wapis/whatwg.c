@@ -4,7 +4,8 @@
 #include <string.h>
 
 // Extremely naive timer polyfills (immediate execution). No persistence.
-// Use per-context state: next_timer_id lives in the DomAdapterState bound to the JSRuntime.
+// Keep a tiny per-context state attached to the JS global, not the JSRuntime opaque
+// (the runtime opaque is reserved for the DOM adapter's state).
 typedef struct DomTinyState {
    int next_timer_id;
 } DomTinyState;
@@ -13,20 +14,7 @@ static DomTinyState* tiny_from(JSContext* ctx)
 {
    if (!ctx)
       return NULL;
-   JSRuntime* rt = JS_GetRuntime(ctx);
-   void* opq = JS_GetRuntimeOpaque(rt);
-   // DomAdapterState is a C++ struct; avoid including its headers from C, store a small C companion state instead.
-   // We piggyback on runtime opaque if it's NULL to stash our tiny state.
-   if (!opq) {
-      DomTinyState* ts = (DomTinyState*)malloc(sizeof(DomTinyState));
-      if (ts) {
-         ts->next_timer_id = 1;
-         JS_SetRuntimeOpaque(rt, ts);
-      }
-      return ts;
-   }
-   // If runtime opaque is already set by the C++ side, we cannot mutate or introspect it here in C safely.
-   // Fallback: keep a context-private hidden property.
+   // Keep a context-private hidden property on the global object.
    JSValue g = JS_GetGlobalObject(ctx);
    JSAtom sym = JS_NewAtom(ctx, "__tinyTimers");
    JSValue v = JS_GetProperty(ctx, g, sym);

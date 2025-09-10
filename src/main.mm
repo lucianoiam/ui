@@ -300,9 +300,12 @@ static void present_surface(NSImageView* iv, sk_sp<SkSurface> surface, int W, in
    CGImageRef cgImage = CGImageCreate(pixmap.width(), pixmap.height(), 8, 32, pixmap.rowBytes(), colorSpace, bitmapInfo,
                                       provider, NULL, false, kCGRenderingIntentDefault);
    if (cgImage) {
-      NSImage* img = [[NSImage alloc] initWithCGImage:cgImage size:NSMakeSize(W, H)];
-      [iv setImage:img];
-      CGImageRelease(cgImage);
+   NSImage* img = [[NSImage alloc] initWithCGImage:cgImage size:NSMakeSize(W, H)];
+   [iv setImage:img];
+#if !__has_feature(objc_arc)
+   [img release];
+#endif
+   CGImageRelease(cgImage);
    }
    CGDataProviderRelease(provider);
    CGColorSpaceRelease(colorSpace);
@@ -399,11 +402,13 @@ TestResult run_preact_test(const char* test_js, const char* output_html, const c
    JSValue global = JS_UNDEFINED, document = JS_UNDEFINED, body = JS_UNDEFINED;
    const char* assign_hooks = "if (typeof preactHooks !== 'undefined') preact.hooks = preactHooks;";
 
-   define_whatwg_globals(ctx);
    std::unique_ptr<DomAdapterState, void (*)(DomAdapterState*)> st(dom_adapter_create(), dom_adapter_destroy);
    // Bind state to both context and runtime (runtime used by finalizers)
    JS_SetContextOpaque(ctx, st.get());
    JS_SetRuntimeOpaque(rt, st.get());
+   // Define WHATWG-like globals after binding adapter state so timer polyfills
+   // use context-local storage and do not claim runtime opaque.
+   define_whatwg_globals(ctx);
    // Initialize per-context device scale before any canvases are created (crisp rendering on high-DPI)
    {
       float scale = 1.0f;
