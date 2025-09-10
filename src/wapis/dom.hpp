@@ -10,6 +10,11 @@ namespace dom {
 
 enum class NodeType { ELEMENT = 1, TEXT = 3, DOCUMENT = 9 };
 
+// Optional engine hooks (per-Document)
+class Element; class Node; class Document; class DomObserver;
+using AttributeHook = void (*)(Element*, const std::string& name, const std::string& value);
+using MutationHook  = void (*)(Node* target, const char* op, Node* related);
+
 class Node : public std::enable_shared_from_this<Node> {
 public:
   NodeType nodeType;
@@ -29,11 +34,11 @@ public:
   virtual bool contains(std::shared_ptr<Node> other) const;
   virtual bool hasChildNodes() const;
 
-  // --- textContent convenience (moved from adapter) ---
+  // --- textContent convenience ---
   virtual std::string textContent() const;           // Concatenate descendant text nodes
   virtual void setTextContent(const std::string& v); // Replace children (or value for Text)
 
-  // NOTE: innerHTML/outerHTML removed from Node to better match spec (they belong on Element).
+  // innerHTML/outerHTML are defined on Element.
 
   // --- Event listeners (engine-agnostic bookkeeping) ---
   void addEventListener(const std::string& type);
@@ -107,6 +112,22 @@ public:
   Document();
   std::shared_ptr<Element> createElement(const std::string& tag);
   std::shared_ptr<Text> createTextNode(const std::string& value);
+  // Monotonic debug id source (per-document, avoids globals)
+  uint64_t nextDebugId();
+  // Per-document observer management
+  void addObserver(DomObserver*);
+  void removeObserver(DomObserver*);
+  const std::vector<DomObserver*>& observers() const { return observers_; }
+  // Per-document DOM hooks
+  void setAttributeHook(AttributeHook cb) { attrHook_ = cb; }
+  AttributeHook getAttributeHook() const { return attrHook_; }
+  void setMutationHook(MutationHook cb) { mutHook_ = cb; }
+  MutationHook getMutationHook() const { return mutHook_; }
+private:
+  std::atomic<uint64_t> idCounter{1};
+  std::vector<DomObserver*> observers_;
+  AttributeHook attrHook_ = nullptr;
+  MutationHook mutHook_ = nullptr;
 };
 
 // Factory helpers

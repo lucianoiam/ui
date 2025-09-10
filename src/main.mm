@@ -1,4 +1,4 @@
-#include "wapis/dom.hpp" // for dom::Element attribute access
+#include "wapis/dom.hpp"
 #include "wapis/dom_adapter.h"
 #include "wapis/whatwg.h"
 #include <quickjs.h>
@@ -10,13 +10,14 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
-// Lexbor for pretty HTML formatting
+// Pretty HTML formatting
 #include "renderer/sk_canvas_view.h"
 #include "renderer/layout_yoga.h"
 #include "renderer/renderer.h"
 #include "renderer/scheduler.h"
 #include "renderer/viewport.h" // default viewport size
 #import <Cocoa/Cocoa.h>
+#include "input/input.h"
 #include <include/core/SkCanvas.h>
 #include <include/core/SkImage.h>
 #include <include/core/SkSurface.h>
@@ -24,21 +25,17 @@
 #include <random>
 #include <string>
 #include <utility>
+#include <memory>
 
 // Forward declare dump_exception for use in mouse event forwarding
 static void dump_exception(JSContext *ctx);
 
-// Globals from deferred runtime (declared later in file). We'll extern them
-// here if needed. g_deferred_ctx defined later (deferred runtime support)
-
-// Old direct mouse bridge removed; handled via input subsystem (see
-// input/mac.mm)
+// Live window support uses an input subsystem (see input/mac.mm)
 @interface CanvasImageView : NSImageView
-@end // legacy (no events)
+@end
 #import "input/InputImageView.h"
 
-// Reusable pretty HTML formatter using Lexbor. Accepts raw outerHTML of <body>
-// subtree.
+// Pretty HTML formatter using Lexbor. Accepts raw outerHTML of <body> subtree.
 static std::string pretty_format_body_html(const char *body_outer_html) {
   if (!body_outer_html)
     return {};
@@ -74,8 +71,7 @@ static std::string pretty_format_body_html(const char *body_outer_html) {
   lxb_html_document_destroy(lxb_doc);
   if (pretty.empty())
     return body_outer_html; // fallback
-  // Lexbor currently quotes text node data; strip leading/trailing quotes on
-  // lines consisting solely of quoted text.
+  // Strip leading/trailing quotes added around text-only lines.
   std::string cleaned;
   cleaned.reserve(pretty.size());
   size_t start = 0;
@@ -126,8 +122,8 @@ struct DiagnosticDtor {
 
 // Uncomment to enable each test
 
-// #define ENABLE_TEST_1 // disabled (kept for reference)
-// #define ENABLE_TEST_2 // disabled (kept for reference)
+// #define ENABLE_TEST_1 // disabled
+// #define ENABLE_TEST_2 // disabled
 #define ENABLE_TEST_3 // new render test
 
 typedef struct {
@@ -135,13 +131,13 @@ typedef struct {
   int success;
 } TestResult;
 
-// Deferred environment (only used for live render window test)
+// Deferred environment (used for live render window test)
 static JSRuntime *g_deferred_rt = nullptr;
 JSContext *g_deferred_ctx = nullptr;
 static JSValue g_deferred_global = JS_UNDEFINED;
 static JSValue g_deferred_document = JS_UNDEFINED;
 static JSValue g_deferred_body = JS_UNDEFINED;
-// No global DomAdapterState; fetch from JSRuntime/JSContext opaque when needed.
+// DomAdapterState is owned per QuickJS runtime.
 
 // Forward declaration for compositing reuse
 static void perform_composite_and_present(NSImageView *iv,
@@ -152,33 +148,53 @@ static sk_sp<SkSurface> g_windowSurface;
 int g_winW = VIEWPORT_DEFAULT_WIDTH,
     g_winH = VIEWPORT_DEFAULT_HEIGHT; // single initialization point
 
+// Resolve the current Renderer by scanning the Document's observers from the JSContext.
+static Renderer* renderer_from_ctx(JSContext* ctx) {
+  if (!ctx) return nullptr;
+  JSValue global = JS_GetGlobalObject(ctx);
+  JSValue document = JS_GetPropertyStr(ctx, global, "document");
+  auto* docNode = reinterpret_cast<dom::Node*>(dom_get_cpp_node_opaque(ctx, (JSValueConst)document));
+  JS_FreeValue(ctx, document);
+  JS_FreeValue(ctx, global);
+  if (!docNode) return nullptr;
+  if (auto d = std::dynamic_pointer_cast<dom::Document>(docNode->shared_from_this())) {
+    for (auto* o : d->observers()) {
+  if (auto* r = dynamic_cast<Renderer*>(o)) return r;
+    }
+  }
+  return nullptr;
+}
+
 static void composite_into_surface(sk_sp<SkSurface> surface, int W, int H) {
   if (!surface)
     return;
-  // Make sure layout applied just-in-time (in case no explicit requestComposite
-  // call)
+  // Apply layout just-in-time if needed
   if (g_deferred_ctx)
     layout_maybe_run(g_deferred_ctx);
   // Retrieve adapter state bound to the deferred runtime (for canvas id lookups)
   DomAdapterState *st_for_canvas = nullptr;
+  GfxStateHandle* gs = nullptr;
   if (g_deferred_ctx) {
     JSRuntime *rt = JS_GetRuntime(g_deferred_ctx);
     st_for_canvas = (DomAdapterState *)JS_GetRuntimeOpaque(rt);
+    // Fetch per-context graphics state owned by the adapter
+    extern GfxStateHandle* dom_gfx_state(JSContext* ctx);
+    gs = dom_gfx_state(g_deferred_ctx);
   }
   SkCanvas *canvas = surface->getCanvas();
   canvas->clear(SkColorSetARGB(255, 0x20, 0x20, 0x20));
-  extern bool gfx_get_size(int id, int *w, int *h);
-  extern sk_sp<SkImage> gfx_snapshot(int id);
+  extern bool gfx_get_size(GfxStateHandle* gs, int id, int *w, int *h);
+  extern sk_sp<SkImage> gfx_snapshot(GfxStateHandle* gs, int id);
   extern int dom_element_canvas_id(DomAdapterState*, dom::Element * el, bool createIfMissing);
-  renderer_for_each_layer([&](RenderLayer *rl) {
+  Renderer* renderer = renderer_from_ctx(g_deferred_ctx);
+  if (!renderer) return;
+  renderer->forEachLayer([&](RenderLayer *rl) {
     if (!rl || !rl->element)
       return;
     int id = st_for_canvas ? dom_element_canvas_id(st_for_canvas, rl->element, false) : 0;
     int x = 0, y = 0, w = 0, h = 0;
     if (!layout_get_box(rl->element, x, y, w, h)) {
-      // Fallback: if layout omitted this element (e.g. absolute positioned canvases)
-      // parse a few positioning declarations from styleCssText so interactive dragging
-      // (which rewrites left/top) becomes visible. TODO: route through centralized CSS parser.
+  // Fallback for elements without layout box. Parse a few positioning declarations from styleCssText.
       const std::string &st_fallback = rl->element->styleCssText;
       auto parseDeclInt = [&](const char *prop) {
         size_t p = st_fallback.find(prop);
@@ -232,7 +248,7 @@ static void composite_into_surface(sk_sp<SkSurface> surface, int W, int H) {
         h = 50;
       }
     }
-    // Override with absolute positioning if explicitly styled, even if layout provided a box.
+  // Override with absolute positioning if explicitly styled.
     const std::string &style_override = rl->element->styleCssText;
     if (style_override.find("position:absolute") != std::string::npos ||
         style_override.find("left:") != std::string::npos ||
@@ -290,7 +306,7 @@ static void composite_into_surface(sk_sp<SkSurface> surface, int W, int H) {
       return (SkColor)0;
     };
     SkColor bg = 0;
-    // background-color:
+  // Background color
     size_t bcp = st.find("background-color:");
     if (bcp != std::string::npos) {
       size_t vs = bcp + 17;
@@ -316,7 +332,7 @@ static void composite_into_surface(sk_sp<SkSurface> surface, int W, int H) {
       canvas->drawRect(SkRect::MakeXYWH(x, y, w, h), p);
     }
     if (id) {
-      auto img = gfx_snapshot(id);
+      auto img = gfx_snapshot(gs, id);
       if (img) {
         canvas->drawImage(img.get(), (SkScalar)x, (SkScalar)y);
         if (getenv("DEBUG_DRAW_BORDER")) {
@@ -340,7 +356,7 @@ static void present_surface(NSImageView *iv, sk_sp<SkSurface> surface, int W,
     return;
   CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
   CGBitmapInfo bitmapInfo =
-      kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big;
+      (CGBitmapInfo)kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big;
   CGDataProviderRef provider = CGDataProviderCreateWithData(
       NULL, pixmap.addr(), pixmap.rowBytes() * pixmap.height(), NULL);
   CGImageRef cgImage = CGImageCreate(
@@ -376,12 +392,11 @@ void native_request_composite(JSContext *ctx) {
   }
 }
 
-// Minimal native->JS mouse event bridge (no architecture): calls global
-// onNativeMouseEvent(evt)
+// Minimal native->JS mouse event bridge: calls global onNativeMouseEvent(evt)
 @implementation CanvasImageView
 @end
 
-// Adapter state is owned per QuickJS runtime; no globals here.
+// Adapter state is owned per QuickJS runtime.
 
 static void do_runtime_full_cleanup(JSRuntime *rt, JSContext *ctx,
                                     JSValue global, JSValue document,
@@ -389,6 +404,12 @@ static void do_runtime_full_cleanup(JSRuntime *rt, JSContext *ctx,
   if (!ctx || !rt)
     return;
   fprintf(stderr, "[DEBUG] (deferred) Cleanup: start\n");
+  // Delete host state (InputManager) before tearing down the context
+  if (void *host = dom_get_host_state(ctx)) {
+    auto *im = reinterpret_cast<input::InputManager *>(host);
+    delete im;
+    dom_set_host_state(ctx, nullptr);
+  }
   JS_SetPropertyStr(ctx, global, "document", JS_UNDEFINED);
   if (!JS_IsUndefined(document))
     JS_SetPropertyStr(ctx, document, "body", JS_UNDEFINED);
@@ -444,25 +465,38 @@ TestResult run_preact_test(const char *test_js, const char *output_html,
       "if (typeof preactHooks !== 'undefined') preact.hooks = preactHooks;";
 
   define_whatwg_globals(ctx);
-  DomAdapterState *st = dom_adapter_create();
+  std::unique_ptr<DomAdapterState, void (*)(DomAdapterState *)> st(dom_adapter_create(), dom_adapter_destroy);
   // Bind state to both context and runtime (runtime used by finalizers)
-  JS_SetContextOpaque(ctx, st);
-  JS_SetRuntimeOpaque(rt, st);
-  dom_define_node_proto(st, ctx);
+  JS_SetContextOpaque(ctx, st.get());
+  JS_SetRuntimeOpaque(rt, st.get());
+  dom_define_node_proto(st.get(), ctx);
   global = JS_GetGlobalObject(ctx);
-  document = dom_create_document(st, ctx);
+  document = dom_create_document(st.get(), ctx);
   JS_SetPropertyStr(ctx, global, "document", JS_DupValue(ctx, document));
   // Expose factory methods via adapter helper (internal js_create* now static)
-  dom_attach_document_factories(st, ctx, document);
+  dom_attach_document_factories(st.get(), ctx, document);
+  // Attach a renderer owned by the adapter to the current Document
+  dom_attach_renderer(ctx);
+  // Create per-context input manager and store in adapter host state
+  {
+    auto *docNode = reinterpret_cast<dom::Node *>(dom_get_cpp_node_opaque(ctx, (JSValueConst)document));
+    std::shared_ptr<dom::Document> cppDoc;
+    if (docNode && docNode->nodeType == dom::NodeType::DOCUMENT) {
+      cppDoc = std::dynamic_pointer_cast<dom::Document>(docNode->shared_from_this());
+    }
+    if (cppDoc) {
+      auto *im = new input::InputManager(cppDoc);
+      dom_set_host_state(ctx, im);
+    }
+  }
   body = JS_GetPropertyStr(ctx, document, "body");
   JS_SetPropertyStr(ctx, global, "window", JS_DupValue(ctx, global));
   JS_SetPropertyStr(ctx, global, "self", JS_DupValue(ctx, global));
   JS_SetPropertyStr(ctx, global, "globalThis", JS_DupValue(ctx, global));
   // Install gfx (Skia surface) helpers
   gfx_install_js(ctx);
-  // Initialize renderer (DOM observer)
+  // Initialize renderer scheduling subsystem
   scheduler_init();
-  renderer_init();
 
   preact_js = load_file(preact_js_path, &preact_js_len);
   if (!preact_js) {
@@ -568,6 +602,8 @@ cleanup:
     g_deferred_body = body;
     fprintf(stderr,
             "[DEBUG] Deferred cleanup (keeping runtime alive for window)\n");
+  // Keep DomAdapterState alive; will be destroyed in do_runtime_full_cleanup
+  (void)st.release();
   } else {
     fprintf(stderr, "[DEBUG] Cleanup: start\n");
     JS_SetPropertyStr(ctx, global, "document", JS_UNDEFINED);
@@ -582,7 +618,7 @@ cleanup:
     const char *disableCleanup = getenv("DOM_DISABLE_CLEANUP");
     if (!disableCleanup || !*disableCleanup) {
       JS_RunGC(rt);
-      dom_runtime_cleanup(st, ctx);
+  dom_runtime_cleanup(st.get(), ctx);
       JS_RunGC(rt);
     } else {
       fprintf(
@@ -592,6 +628,12 @@ cleanup:
     for (int i = 0; i < 3; ++i)
       JS_RunGC(rt);
     fprintf(stderr, "[DEBUG] Freeing JSContext and JSRuntime\n");
+    // Delete host state (InputManager) before freeing context
+    if (void *host = dom_get_host_state(ctx)) {
+      auto *im = reinterpret_cast<input::InputManager *>(host);
+      delete im;
+      dom_set_host_state(ctx, nullptr);
+    }
     JS_FreeContext(ctx);
     {
       volatile char *p = (char *)malloc(16);
@@ -600,9 +642,9 @@ cleanup:
         free((void *)p);
       }
     }
-    dom_adapter_unregister_runtime(st, rt);
-    JS_FreeRuntime(rt);
-    dom_adapter_destroy(st);
+  dom_adapter_unregister_runtime(st.get(), rt);
+  JS_FreeRuntime(rt);
+  // renderer unique_ptr will go out of scope and be destroyed here
   }
   FILE *mf = fopen("output/last_run_ok.marker", "w");
   if (mf) {
@@ -760,9 +802,7 @@ int main(int argc, char **argv) {
   @autoreleasepool {
     NSApplication *app = [NSApplication sharedApplication];
     [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
-    static id appDel = nil;
-    if (!appDel)
-      appDel = [NSObject new];
+  id appDel = [NSObject new];
     NSRect frame = NSMakeRect(0, 0, g_winW, g_winH);
     NSWindow *window =
         [[NSWindow alloc] initWithContentRect:frame
@@ -860,6 +900,12 @@ int main(int argc, char **argv) {
     // After window loop exits (user closed window), perform deferred cleanup if
     // any
     if (g_deferred_rt && g_deferred_ctx) {
+      // Delete host state (InputManager) stored per-context prior to teardown
+      if (void *host = dom_get_host_state(g_deferred_ctx)) {
+        auto *im = reinterpret_cast<input::InputManager *>(host);
+        delete im;
+        dom_set_host_state(g_deferred_ctx, nullptr);
+      }
       do_runtime_full_cleanup(g_deferred_rt, g_deferred_ctx, g_deferred_global,
                               g_deferred_document, g_deferred_body);
       g_deferred_rt = nullptr;

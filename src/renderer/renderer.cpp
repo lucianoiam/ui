@@ -4,23 +4,6 @@
 #include <cstdio>
 extern void layout_mark_dirty();
 
-namespace {
-static Renderer* g_renderer = nullptr;
-}
-
-Renderer* renderer_get()
-{
-   return g_renderer;
-}
-
-void renderer_init()
-{
-   if (!g_renderer) {
-      g_renderer = new Renderer();
-      dom_register_observer(g_renderer);
-   }
-}
-
 RenderLayer* Renderer::ensureLayer(dom::Element* el)
 {
    if (!el)
@@ -142,15 +125,4 @@ void Renderer::forEachLayer(const std::function<void(RenderLayer*)>& cb)
       cb(rl);
 }
 
-void renderer_for_each_layer(const std::function<void(RenderLayer*)>& cb)
-{
-   if (!g_renderer)
-      return;
-   g_renderer->forEachLayer(cb);
-}
-
-void renderer_request_frame()
-{
-   if (g_renderer)
-      g_renderer->scheduleFrame();
-}
+// No global functions; the app should own a Renderer instance.

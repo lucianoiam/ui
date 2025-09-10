@@ -1,10 +1,8 @@
 // dom.cpp - C++ DOM implementation (W3C/WHATWG-inspired)
 #include "dom.hpp"
-#include "dom_hooks.h" // include outside namespace to prevent dom::dom
+// Observers are attached per Document; see dom.hpp
 #include <algorithm>
 #include <atomic>
-
-static std::atomic<uint64_t> g_node_id_counter{1};
 
 namespace dom {
 
@@ -15,8 +13,9 @@ std::shared_ptr<Node> Node::appendChild(std::shared_ptr<Node> child)
       return nullptr;
    child->parentNode = shared_from_this();
    childNodes.push_back(child);
-   if (auto hook = getMutationHook())
-      hook(this, "append", child.get());
+   if (auto doc = std::dynamic_pointer_cast<Document>(ownerDocument.lock())) {
+      if (auto hook = doc->getMutationHook()) hook(this, "append", child.get());
+   }
    return child;
 }
 
@@ -29,8 +28,9 @@ std::shared_ptr<Node> Node::insertBefore(std::shared_ptr<Node> newChild, std::sh
       return appendChild(newChild);
    newChild->parentNode = shared_from_this();
    childNodes.insert(it, newChild);
-   if (auto hook = getMutationHook())
-      hook(this, "insert", newChild.get());
+   if (auto doc = std::dynamic_pointer_cast<Document>(ownerDocument.lock())) {
+      if (auto hook = doc->getMutationHook()) hook(this, "insert", newChild.get());
+   }
    return newChild;
 }
 
@@ -38,8 +38,9 @@ std::shared_ptr<Node> Node::removeChild(std::shared_ptr<Node> child)
 {
    auto it = std::find(childNodes.begin(), childNodes.end(), child);
    if (it != childNodes.end()) {
-      if (auto hook = getMutationHook())
-         hook(this, "remove", child.get());
+      if (auto doc = std::dynamic_pointer_cast<Document>(ownerDocument.lock())) {
+         if (auto hook = doc->getMutationHook()) hook(this, "remove", child.get());
+      }
       (*it)->parentNode.reset();
       childNodes.erase(it);
       return child;
@@ -51,8 +52,9 @@ std::shared_ptr<Node> Node::replaceChild(std::shared_ptr<Node> newChild, std::sh
 {
    auto it = std::find(childNodes.begin(), childNodes.end(), oldChild);
    if (it != childNodes.end()) {
-      if (auto hook = getMutationHook())
-         hook(this, "replace", oldChild.get());
+      if (auto doc = std::dynamic_pointer_cast<Document>(ownerDocument.lock())) {
+         if (auto hook = doc->getMutationHook()) hook(this, "replace", oldChild.get());
+      }
       newChild->parentNode = shared_from_this();
       (*it)->parentNode.reset();
       *it = newChild;
@@ -123,7 +125,7 @@ void Node::setTextContent(const std::string& v)
    }
 }
 
-// Removed Node::innerHTML / outerHTML to align closer with spec (they belong to Element)
+// Element implements minimal innerHTML/outerHTML; Node exposes textContent.
 
 void Node::addEventListener(const std::string& type)
 {
@@ -148,7 +150,7 @@ bool Node::hasEventListener(const std::string& type) const
 
 void Node::dispatchEvent(const std::string& type)
 {
-   // Placeholder: just check if any listener registered; real impl would queue tasks.
+      // Basic dispatch: check for a registered listener count.
    (void)type; // no-op; adapter may integrate later.
 }
 
@@ -192,8 +194,9 @@ void Element::setAttribute(const std::string& name, const std::string& value)
       // Keep styleCssText mirror in sync (generic mirror; engine may ignore)
       const_cast<Element*>(this)->styleCssText = value;
    }
-   if (auto hook = getAttributeHook())
-      hook(this, name, value);
+      if (auto doc = std::dynamic_pointer_cast<Document>(ownerDocument.lock())) {
+            if (auto hook = doc->getAttributeHook()) hook(this, name, value);
+      }
 }
 
 std::string Element::getAttribute(const std::string& name) const
@@ -245,7 +248,7 @@ std::shared_ptr<Element> Document::createElement(const std::string& tag)
    el->nodeName = tag;
    el->tagName = tag;
    el->ownerDocument = shared_from_this();
-   el->debugId = g_node_id_counter.fetch_add(1, std::memory_order_relaxed);
+   el->debugId = nextDebugId();
    return el;
 }
 
@@ -253,7 +256,7 @@ std::shared_ptr<Text> Document::createTextNode(const std::string& value)
 {
    auto t = std::make_shared<Text>(value);
    t->ownerDocument = shared_from_this();
-   t->debugId = g_node_id_counter.fetch_add(1, std::memory_order_relaxed);
+   t->debugId = nextDebugId();
    return t;
 }
 
@@ -316,8 +319,24 @@ std::string Element::outerHTML() const
 std::shared_ptr<Document> createDocument()
 {
    auto d = std::make_shared<Document>();
-   d->debugId = g_node_id_counter.fetch_add(1, std::memory_order_relaxed);
+   d->debugId = d->nextDebugId();
    return d;
+}
+
+uint64_t Document::nextDebugId()
+{
+   return idCounter.fetch_add(1, std::memory_order_relaxed);
+}
+
+void Document::addObserver(DomObserver* o)
+{
+   if (!o) return;
+   if (std::find(observers_.begin(), observers_.end(), o) == observers_.end()) observers_.push_back(o);
+}
+
+void Document::removeObserver(DomObserver* o)
+{
+   observers_.erase(std::remove(observers_.begin(), observers_.end(), o), observers_.end());
 }
 
 } // namespace dom

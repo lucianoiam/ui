@@ -30,7 +30,14 @@ extern int g_winH;
 
 - (void)dispatchMouseEventType:(const char *)type x:(int)x y:(int)y {
   InputEvent ev{type, x, y};
-  input::feed(ev);
+  // Forward to per-context input manager if available (no globals)
+  if (g_deferred_ctx) {
+    void *host = dom_get_host_state(g_deferred_ctx);
+    auto *im = reinterpret_cast<input::InputManager *>(host);
+    if (im) {
+      im->feed(ev);
+    }
+  }
   if (!g_deferred_ctx)
     return;
   JSValue global = JS_GetGlobalObject(g_deferred_ctx);

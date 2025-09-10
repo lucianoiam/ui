@@ -1,8 +1,9 @@
-// dom_adapter.cpp - QuickJS <-> C++ DOM bridge using dom.hpp backend (renamed from dom_qjs.cpp)
+// dom_adapter.cpp - QuickJS <-> C++ DOM bridge using dom.hpp backend
 #include "dom_adapter.h"
 #include "dom.hpp"
-#include "renderer/sk_canvas_view.h" // moved
+#include "renderer/sk_canvas_view.h"
 #include "renderer/dom_observer.h"
+#include "renderer/renderer.h"
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
@@ -17,7 +18,7 @@ using dom::Element;
 using dom::Node;
 using dom::Text;
 
-// Instance state (no global mutable data) -------------------------------------------------
+// Instance state
 struct DomAdapterState {
    std::unordered_map<void*, std::shared_ptr<Node>> node_registry;
    std::unordered_map<void*, JSValue> node_wrappers;
@@ -34,10 +35,21 @@ struct DomAdapterState {
       JSClassDef dom_node_class_def{};
       bool dom_class_def_init = false;
       JSClassID canvas_ctx2d_class_id = 0;
+   // Per-runtime graphics state (opaque handle)
+   GfxStateHandle* gfx_state = nullptr;
+   // Renderer owned per runtime/context (avoids globals)
+   std::unique_ptr<Renderer> renderer;
+   // Host state (opaque pointer, owned by host)
+   void* host_state = nullptr;
 };
 
 DomAdapterState* dom_adapter_create() { return new DomAdapterState(); }
-void dom_adapter_destroy(DomAdapterState* s) { delete s; }
+void dom_adapter_destroy(DomAdapterState* s) {
+   if (!s) return;
+   if (s->gfx_state) { gfx_state_destroy(s->gfx_state); s->gfx_state = nullptr; }
+   s->renderer.reset();
+   delete s;
+}
 
 static inline DomAdapterState* state_from(JSContext* ctx) {
    return (DomAdapterState*)JS_GetContextOpaque(ctx);
@@ -87,12 +99,33 @@ extern "C" void* dom_get_cpp_node_opaque(JSContext* ctx, JSValueConst v)
    return sp.get();
 }
 
-// Backward compatibility wrapper: allow existing code using get_cpp_node(ctx, val)
+// Convenience wrapper: fetch state from ctx and resolve the node
 static inline std::shared_ptr<Node> get_cpp_node(JSContext* ctx, JSValueConst val)
 {
    auto* st = state_from(ctx);
    if (!st) return nullptr;
    return get_cpp_node(st, ctx, val);
+}
+
+void dom_set_host_state(JSContext* ctx, void* host)
+{
+   if (!ctx) return;
+   auto* st = state_from(ctx);
+   if (st) st->host_state = host;
+}
+
+void* dom_get_host_state(JSContext* ctx)
+{
+   auto* st = state_from(ctx);
+   return st ? st->host_state : nullptr;
+}
+
+GfxStateHandle* dom_gfx_state(JSContext* ctx)
+{
+   auto* st = state_from(ctx);
+   if (!st) return nullptr;
+   if (!st->gfx_state) st->gfx_state = gfx_state_create();
+   return st->gfx_state;
 }
 
 static void js_dom_node_finalizer(JSRuntime* rt, JSValue val)
@@ -198,7 +231,9 @@ static JSValue js_createElement(JSContext* ctx, JSValueConst this_val, int argc,
       return JS_UNDEFINED;
    const char* tag = JS_ToCString(ctx, argv[0]);
    auto el = doc->createElement(tag);
-   dom_notify_element_created(el.get());
+   if (auto d = std::dynamic_pointer_cast<dom::Document>(el->ownerDocument.lock())) {
+      for (auto* o : d->observers()) o->onElementCreated(el.get());
+   }
    JS_FreeCString(ctx, tag);
    return wrap_node_js(ctx, el);
 }
@@ -212,7 +247,9 @@ static JSValue js_createElementNS(JSContext* ctx, JSValueConst this_val, int arg
       return JS_UNDEFINED;
    const char* tag = JS_ToCString(ctx, argv[1]);
    auto el = doc->createElement(tag);
-   dom_notify_element_created(el.get());
+   if (auto d = std::dynamic_pointer_cast<dom::Document>(el->ownerDocument.lock())) {
+      for (auto* o : d->observers()) o->onElementCreated(el.get());
+   }
    JS_FreeCString(ctx, tag);
    return wrap_node_js(ctx, el);
 }
@@ -498,7 +535,9 @@ static JSValue js_setAttribute_with_notify(JSContext* ctx, JSValueConst this_val
    el->setAttribute(name, value);
    std::string newv = el->getAttribute(name);
    if (name) {
-      dom_notify_attribute_changed(el.get(), name, oldv, newv);
+      if (auto d = std::dynamic_pointer_cast<dom::Document>(el->ownerDocument.lock())) {
+         for (auto* o : d->observers()) o->onAttributeChanged(el.get(), name, oldv, newv);
+      }
    }
    JS_FreeCString(ctx, name);
    JS_FreeCString(ctx, value);
@@ -543,7 +582,9 @@ static JSValue js_appendChild(JSContext* ctx, JSValueConst this_val, int argc, J
       return JS_UNDEFINED;
    n->appendChild(c);
    if (n->nodeType == dom::NodeType::ELEMENT)
-      dom_notify_childlist_changed(std::static_pointer_cast<Element>(n).get());
+      if (auto d = std::dynamic_pointer_cast<dom::Document>(n->ownerDocument.lock())) {
+         for (auto* o : d->observers()) o->onChildListChanged(std::static_pointer_cast<Element>(n).get());
+      }
    return JS_DupValue(ctx, argv[0]);
 }
 
@@ -558,7 +599,9 @@ static JSValue js_insertBefore(JSContext* ctx, JSValueConst this_val, int argc, 
       return JS_UNDEFINED;
    n->insertBefore(nc, rc);
    if (n->nodeType == dom::NodeType::ELEMENT)
-      dom_notify_childlist_changed(std::static_pointer_cast<Element>(n).get());
+      if (auto d = std::dynamic_pointer_cast<dom::Document>(n->ownerDocument.lock())) {
+         for (auto* o : d->observers()) o->onChildListChanged(std::static_pointer_cast<Element>(n).get());
+      }
    return JS_DupValue(ctx, argv[0]);
 }
 
@@ -572,9 +615,13 @@ static JSValue js_removeChild(JSContext* ctx, JSValueConst this_val, int argc, J
       return JS_UNDEFINED;
    n->removeChild(c);
    if (n->nodeType == dom::NodeType::ELEMENT)
-      dom_notify_childlist_changed(std::static_pointer_cast<Element>(n).get());
+      if (auto d = std::dynamic_pointer_cast<dom::Document>(n->ownerDocument.lock())) {
+         for (auto* o : d->observers()) o->onChildListChanged(std::static_pointer_cast<Element>(n).get());
+      }
    if (c->nodeType == dom::NodeType::ELEMENT)
-      dom_notify_element_removed(std::static_pointer_cast<Element>(c).get());
+      if (auto d = std::dynamic_pointer_cast<dom::Document>(c->ownerDocument.lock())) {
+         for (auto* o : d->observers()) o->onElementRemoved(std::static_pointer_cast<Element>(c).get());
+      }
    return JS_DupValue(ctx, argv[0]);
 }
 
@@ -589,11 +636,17 @@ static JSValue js_replaceChild(JSContext* ctx, JSValueConst this_val, int argc, 
       return JS_UNDEFINED;
    n->replaceChild(nc, oc);
    if (n->nodeType == dom::NodeType::ELEMENT)
-      dom_notify_childlist_changed(std::static_pointer_cast<Element>(n).get());
+      if (auto d = std::dynamic_pointer_cast<dom::Document>(n->ownerDocument.lock())) {
+         for (auto* o : d->observers()) o->onChildListChanged(std::static_pointer_cast<Element>(n).get());
+      }
    if (oc->nodeType == dom::NodeType::ELEMENT)
-      dom_notify_element_removed(std::static_pointer_cast<Element>(oc).get());
+      if (auto d = std::dynamic_pointer_cast<dom::Document>(oc->ownerDocument.lock())) {
+         for (auto* o : d->observers()) o->onElementRemoved(std::static_pointer_cast<Element>(oc).get());
+      }
    if (nc->nodeType == dom::NodeType::ELEMENT)
-      dom_notify_element_created(std::static_pointer_cast<Element>(nc).get());
+      if (auto d = std::dynamic_pointer_cast<dom::Document>(nc->ownerDocument.lock())) {
+         for (auto* o : d->observers()) o->onElementCreated(std::static_pointer_cast<Element>(nc).get());
+      }
    return JS_DupValue(ctx, argv[1]);
 }
 
@@ -704,7 +757,7 @@ static JSValue js_ctx_fillRect(JSContext* ctx, JSValueConst this_val, int argc, 
    auto* stc = state_from(ctx);
    JSCanvasContext2D* c2d = (JSCanvasContext2D*)JS_GetOpaque2(ctx, this_val, stc ? stc->canvas_ctx2d_class_id : 0);
    if (c2d)
-      gfx_fill_rect(c2d->canvasId, x, y, w, h, (uint32_t)color);
+      gfx_fill_rect(dom_gfx_state(ctx), c2d->canvasId, x, y, w, h, (uint32_t)color);
    return JS_UNDEFINED;
 }
 
@@ -722,7 +775,7 @@ static JSValue js_ctx_fillCircle(JSContext* ctx, JSValueConst this_val, int argc
    auto* stc = state_from(ctx);
    JSCanvasContext2D* c2d = (JSCanvasContext2D*)JS_GetOpaque2(ctx, this_val, stc ? stc->canvas_ctx2d_class_id : 0);
    if (c2d)
-      gfx_fill_circle(c2d->canvasId, cx, cy, r, (uint32_t)color);
+      gfx_fill_circle(dom_gfx_state(ctx), c2d->canvasId, cx, cy, r, (uint32_t)color);
    return JS_UNDEFINED;
 }
 
@@ -775,7 +828,7 @@ static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val, int 
    auto* st = state_from(ctx);
    auto it = st->element_canvas_ids.find(el.get());
    if (it == st->element_canvas_ids.end()) {
-      id = gfx_create_canvas(width, height);
+   id = gfx_create_canvas(dom_gfx_state(ctx), width, height);
       st->element_canvas_ids[el.get()] = id;
    } else {
       id = it->second;
@@ -811,15 +864,9 @@ static const MethodDesc kMethods[] = {
    {"getContext", js_element_getContext, 1},
 };
 
-// --- Editor/Indexer Suppression -------------------------------------------------
-// Some lightweight indexers incorrectly flag the anonymous namespace close as an
-// error. Provide a harmless anchor symbol under common IDE macros.
-#if defined(__INTELLISENSE__) || defined(__clang_analyzer__) || defined(__GNUC_ANALYZER__)
-static void __dom_adapter_indexer_sentinel__() {}
-#endif
-// -------------------------------------------------------------------------------
+//
 
-// (removed dummy anchor to avoid any global/static data)
+//
 
 // Public accessor for element-associated canvas id
 int dom_element_canvas_id(DomAdapterState* st, dom::Element* el, bool createIfMissing)
@@ -832,7 +879,8 @@ int dom_element_canvas_id(DomAdapterState* st, dom::Element* el, bool createIfMi
       return it->second;
    if (!createIfMissing)
       return 0;
-   int id = gfx_create_canvas(64, 64);
+   if (!st->gfx_state) st->gfx_state = gfx_state_create();
+   int id = gfx_create_canvas(st->gfx_state, 64, 64);
    if (id > 0)
       map[el] = id;
    return id;
@@ -890,6 +938,22 @@ JSValue dom_create_document(DomAdapterState* st, JSContext* ctx)
    return js_doc;
 }
 
+void dom_attach_renderer(JSContext* ctx)
+{
+   auto* st = state_from(ctx);
+   if (!st) return;
+   if (!st->renderer) st->renderer = std::make_unique<Renderer>();
+   JSValue global = JS_GetGlobalObject(ctx);
+   JSValue document = JS_GetPropertyStr(ctx, global, "document");
+   auto node = get_cpp_node(st, ctx, document);
+   JS_FreeValue(ctx, document);
+   JS_FreeValue(ctx, global);
+   if (!node || node->nodeType != dom::NodeType::DOCUMENT) return;
+   if (auto d = std::dynamic_pointer_cast<dom::Document>(node)) {
+      d->addObserver(st->renderer.get());
+   }
+}
+
 void dom_runtime_cleanup(DomAdapterState* st, JSContext* ctx)
 {
    fprintf(stderr, "[DOM_CLEANUP] wrappers=%zu nodes=%zu\n", st->node_wrappers.size(), st->node_registry.size());
@@ -917,7 +981,7 @@ void dom_runtime_cleanup(DomAdapterState* st, JSContext* ctx)
    }
 }
 
-// Explicitly clear global registration state when a runtime is going away.
+// Clear per-runtime registration when a runtime is going away.
 // This helps in stress tests that create/destroy multiple runtimes sequentially
 // in a single process. Without clearing, we might accidentally skip class
 // re-definition for a new runtime that happens to have a different address

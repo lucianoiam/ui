@@ -17,7 +17,7 @@ struct RenderLayer {
    uint64_t createOrder = 0; // monotonic for stable ordering among siblings
 };
 
-class Renderer : public DomObserver {
+class Renderer : public dom::DomObserver {
  public:
    Renderer() = default;
    ~Renderer() override = default;
@@ -41,10 +41,4 @@ class Renderer : public DomObserver {
    bool framePending_ = false;
 };
 
-// Global singleton accessor (simple for now)
-Renderer* renderer_get();
-void renderer_init();
-// Iterate over all layers (no guarantees on order)
-void renderer_for_each_layer(const std::function<void(RenderLayer*)>& cb);
-// Convenience external request (safe if renderer not inited)
-void renderer_request_frame();
+// Instantiate and manage a Renderer in the embedding app.

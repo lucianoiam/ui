@@ -1,10 +1,10 @@
-// layout_yoga.cpp - internal Yoga layout integration (moved from layout/)
+// Yoga layout integration
 #include "layout_yoga.h"
 #include "renderer/css_parser.h"
-#include "renderer/data.h"
+#include "renderer/element_data.h"
 #include "wapis/dom.hpp"
 #include "wapis/dom_adapter.h"
-#include "wapis/dom_hooks.h"
+#include "wapis/dom.hpp"
 #include <functional>
 #include <lexbor/css/syntax/tokenizer.h>
 #include <memory>
@@ -30,17 +30,20 @@ void layout_mark_dirty()
 }
 } // namespace dom
 
-// Register DOM attribute hook (one-time) to mark layout dirty on style mutations
-struct LayoutDomHookInstaller {
-  LayoutDomHookInstaller()
-  {
-    dom::setAttributeHook(+[](dom::Element* el, const std::string& name, const std::string& value) {
+// Ensure per-document hooks are installed (idempotent)
+static void ensure_layout_hooks(dom::Document* doc)
+{
+  if (!doc) return;
+  if (!doc->getAttributeHook()) {
+    doc->setAttributeHook(+[](dom::Element* el, const std::string& name, const std::string& value) {
       (void)value;
       if (name == "style") {
         mark_style_dirty(el);
       }
     });
-    dom::setMutationHook(+[](dom::Node* target, const char* op, dom::Node* related) {
+  }
+  if (!doc->getMutationHook()) {
+    doc->setMutationHook(+[](dom::Node* target, const char* op, dom::Node* related) {
       // Any structural change marks layout dirty.
       if (target && target->nodeType == dom::NodeType::ELEMENT) {
         mark_layout_dirty(static_cast<dom::Element*>(target));
@@ -66,9 +69,7 @@ struct LayoutDomHookInstaller {
       }
     });
   }
-};
-
-static LayoutDomHookInstaller g_layout_hook_installer;
+}
 
 bool layout_get_box(dom::Element* el, int& x, int& y, int& w, int& h)
 {
@@ -311,6 +312,14 @@ void layout_maybe_run(JSContext* ctx)
   JSValue document = JS_GetPropertyStr(ctx, global, "document");
   JSValue body = JS_GetPropertyStr(ctx, document, "body");
   auto bodyNode = reinterpret_cast<dom::Node*>(dom_get_cpp_node_opaque(ctx, (JSValueConst)body));
+  // Install hooks on the owning document the first time we see it
+  if (bodyNode) {
+    if (auto docSP = bodyNode->ownerDocument.lock()) {
+      if (auto d = std::dynamic_pointer_cast<dom::Document>(docSP)) {
+        ensure_layout_hooks(d.get());
+      }
+    }
+  }
   if (!bodyNode || bodyNode->nodeType != dom::NodeType::ELEMENT) {
     JS_FreeValue(ctx, body);
     JS_FreeValue(ctx, document);

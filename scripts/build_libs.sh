@@ -1,7 +1,6 @@
 #!/bin/bash
 set -e
 
-# Native libraries
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUT_ROOT="$ROOT_DIR/build"
@@ -96,7 +95,6 @@ build_htm() {
   if [ ! -d "node_modules" ]; then
     npm install
   fi
-  # Produce ONLY an unminified UMD build (no module, no minification/compression)
   npx microbundle src/index.mjs -f umd --no-sourcemap --no-minify --no-compress --target web
   cd - > /dev/null
   if [ -f "$HTM_DIR/dist/htm.umd.js" ]; then

@@ -15,12 +15,18 @@ struct InputEvent {
    int y = 0;
 };
 
-// Platform-agnostic dispatcher API
+// Platform-agnostic dispatcher API (instance-based)
 namespace input {
 using Listener = std::function<void(const InputEvent&)>;
-void init(std::shared_ptr<dom::Document> doc); // store weak ref
-void shutdown();
-void feed(const InputEvent& ev); // platform layer calls this
-// Simple hit test over elements that registered listeners of matching type
-dom::Element* hitTest(int x, int y);
+
+class InputManager {
+ public:
+   explicit InputManager(std::shared_ptr<dom::Document> doc): doc_(std::move(doc)) {}
+   void setDocument(std::shared_ptr<dom::Document> doc) { doc_ = std::move(doc); }
+   void feed(const InputEvent& ev); // platform layer calls this
+   dom::Element* hitTest(int x, int y);
+ private:
+   std::shared_ptr<dom::Document> doc_;
+};
+
 } // namespace input

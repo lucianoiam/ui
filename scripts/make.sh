@@ -1,9 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# Build application binary (a.out) into top-level build/ using previously
-# built static libraries under build/{skia,yoga,lexbor,quickjs}.
-# Script can be invoked from any directory.
+# Build application binary (a.out) into build/ using static libraries in build/{skia,yoga,lexbor,quickjs}.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -18,10 +16,7 @@ LEXBOR_LIB="$BUILD_DIR/lexbor/liblexbor_static.a"
 QUICKJS_LIB="$BUILD_DIR/quickjs/libqjs.a"
 
 # If build/ directory does not exist, build the libs
-if [ ! -d "$BUILD_DIR" ]; then
-  echo "[make.sh] build/ directory not found, building libraries..."
-  "$SCRIPT_DIR/build_libs.sh"
-fi
+# Ensure static libraries exist
 
 missing=()
 for lib in "$SKIA_LIB" "$YOGA_LIB" "$LEXBOR_LIB" "$QUICKJS_LIB"; do
@@ -38,7 +33,7 @@ fi
 mkdir -p "$BUILD_DIR"
 
 CXX=${CXX:-c++}
-STD="-std=c++17"
+STD="-std=c++20"
 
 # Initialize flags to avoid unbound variable when DEBUG not set (set -u)
 CXXFLAGS="${CXXFLAGS:-}"
@@ -91,15 +86,13 @@ INCLUDES=(
 SOURCES=(
   "$SRC_DIR/main.mm"
   "$SRC_DIR/renderer/sk_canvas_view.cpp"
-  "$SRC_DIR/renderer/dom_observer.cpp"
   "$SRC_DIR/renderer/renderer.cpp"
   "$SRC_DIR/renderer/scheduler.cpp"
+  "$SRC_DIR/renderer/element_data.cpp"
   "$SRC_DIR/wapis/dom_adapter.cpp"
   "$SRC_DIR/wapis/dom.cpp"
-  "$SRC_DIR/wapis/dom_hooks.cpp"
   "$SRC_DIR/renderer/layout_yoga.cpp"
   "$SRC_DIR/renderer/css_parser.cpp"
-  "$SRC_DIR/renderer/data.cpp"
   "$SRC_DIR/wapis/whatwg.c"
   "$SRC_DIR/input/input.cpp"
   "$SRC_DIR/input/mac.mm"

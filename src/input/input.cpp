@@ -5,17 +5,6 @@
 #include <unordered_map>
 
 namespace input {
-static std::weak_ptr<dom::Document> g_doc;
-
-void init(std::shared_ptr<dom::Document> doc)
-{
-   g_doc = doc;
-}
-
-void shutdown()
-{
-   g_doc.reset();
-}
 
 // Naive style parser helpers
 static int parseDecl(const std::string& style, const char* key)
@@ -47,9 +36,9 @@ static void collectElementsWith(dom::Element* root, std::vector<dom::Element*>& 
    }
 }
 
-dom::Element* hitTest(int x, int y)
+dom::Element* InputManager::hitTest(int x, int y)
 {
-   auto doc = g_doc.lock();
+   auto doc = doc_;
    if (!doc)
       return nullptr;
    // breadth-first collection of all elements
@@ -78,7 +67,7 @@ dom::Element* hitTest(int x, int y)
    return nullptr;
 }
 
-void feed(const InputEvent& ev)
+void InputManager::feed(const InputEvent& ev)
 {
    // Future: queue, coalesce. For now: no-op (dispatch will happen from platform layer in JS binding)
    (void)ev;
