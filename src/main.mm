@@ -191,7 +191,13 @@ static bool g_gpu_sync_frames = false; // force command buffer sync when automat
 #ifdef __APPLE__
 static NSTimer* g_gpuTestTimer = nil; // automated frame test timer
 #endif
+static std::atomic<bool> g_gpu_tearing_down{false};
+static bool g_allow_interactive_composite = true; // can be disabled in RUN_ONLY forced window path
+static std::atomic<bool> g_gpu_frame_active{false}; // prevent re-entrant drawable acquisition
 static bool g_gpu_test_preloop = false; // allow composites before run loop during automated frame test
+static bool g_force_sync = false; // stability mode: force synchronous frames
+static std::atomic<bool> g_gpu_composite_pending{false}; // coalesce JS-driven composite requests
+static sk_sp<SkSurface> g_preloop_gpu_surface; // offscreen surface for automated multi-frame GPU tests
 static sk_sp<GrDirectContext> g_grCtx;
 #ifdef __APPLE__
 static id<MTLDevice> g_mtlDevice = nil;
@@ -208,6 +214,7 @@ static void gpu_shutdown()
 {
    if (!g_use_gpu)
       return;
+   g_gpu_tearing_down.store(true, std::memory_order_release);
 #ifdef __APPLE__
    // Flush & release Skia GPU resources first
    if (g_grCtx) {
@@ -239,11 +246,19 @@ static void composite_into_surface(sk_sp<SkSurface> surface, int W, int H);
 static void gpu_composite_and_present(int W, int H)
 {
    if (!g_use_gpu) return;
+   if (g_gpu_tearing_down.load(std::memory_order_acquire)) return;
    if (!g_run_loop_active && !g_gpu_test_preloop) return;
+   if (!g_allow_interactive_composite && !g_gpu_test_preloop) return;
 #ifdef __APPLE__
    if (!g_metalLayer || !g_grCtx) return;
+   if (g_gpu_frame_active.exchange(true)) return; // already drawing, skip
    @autoreleasepool {
       id<CAMetalDrawable> drawable = [g_metalLayer nextDrawable];
+      if (!drawable) {
+         fprintf(stderr, "[GPU] nextDrawable returned nil; skipping frame.\n");
+      g_gpu_frame_active.store(false, std::memory_order_release);
+         return;
+      }
       if (!drawable) return;
       int dw = (int)[drawable.texture width];
       int dh = (int)[drawable.texture height];
@@ -260,15 +275,14 @@ static void gpu_composite_and_present(int W, int H)
          texInfo = g_inflight_textures.back();
       }
       GrBackendRenderTarget backendRT = GrBackendRenderTargets::MakeMtl(dw, dh, texInfo);
-      id<MTLCommandBuffer> commandBuffer = [g_mtlQueue commandBuffer];
-      if (!commandBuffer) return;
       sk_sp<SkColorSpace> cs = SkColorSpace::MakeSRGB();
       sk_sp<SkSurface> surface = SkSurfaces::WrapBackendRenderTarget(
           g_grCtx.get(), backendRT, kTopLeft_GrSurfaceOrigin, kBGRA_8888_SkColorType, cs, nullptr);
-      if (!surface) { [commandBuffer commit]; return; }
+      if (!surface) { g_gpu_frame_active.store(false, std::memory_order_release); return; }
       surface->getCanvas()->clear(SkColorSetARGB(255,0x20,0x20,0x20));
       composite_into_surface(surface, W, H);
-      if (g_gpu_sync_frames) {
+      bool syncMode = g_gpu_sync_frames || g_force_sync;
+      if (syncMode) {
          std::atomic<bool> done(false);
          GrFlushInfo info = {};
          info.fFinishedProc = [](void* ctx){ ((std::atomic<bool>*)ctx)->store(true, std::memory_order_release); };
@@ -283,15 +297,40 @@ static void gpu_composite_and_present(int W, int H)
          g_grCtx->flush();
          g_grCtx->submit();
       }
-      [commandBuffer presentDrawable:drawable];
-      [commandBuffer commit];
-      if (g_gpu_sync_frames) {
-         [commandBuffer waitUntilCompleted];
-         // Synchronous mode: clear rings (no need to retain beyond frame)
+      id<MTLCommandBuffer> presentCB = [g_mtlQueue commandBuffer];
+      if (presentCB) {
+         [presentCB presentDrawable:drawable];
+         [presentCB commit];
+         if (syncMode) [presentCB waitUntilCompleted];
+      } else {
+         [drawable present];
+      }
+      if (syncMode) {
          g_inflight_textures.clear();
          g_inflight_drawables.clear();
       }
+   g_gpu_frame_active.store(false, std::memory_order_release);
    }
+#endif
+}
+
+// Schedules a GPU composite on the main queue (coalesced). Safe to call from JS event path.
+static void schedule_gpu_composite()
+{
+   if (!g_use_gpu) return;
+   if (g_gpu_tearing_down.load(std::memory_order_acquire)) return;
+   if (!g_allow_interactive_composite && !g_gpu_test_preloop) return;
+   bool expected = false;
+   if (!g_gpu_composite_pending.compare_exchange_strong(expected, true)) return; // already scheduled
+#ifdef __APPLE__
+   dispatch_async(dispatch_get_main_queue(), ^{
+      g_gpu_composite_pending.store(false, std::memory_order_release);
+      gpu_composite_and_present(g_winW, g_winH);
+   });
+#else
+   // Fallback: immediate
+   g_gpu_composite_pending.store(false, std::memory_order_release);
+   gpu_composite_and_present(g_winW, g_winH);
 #endif
 }
 static void composite_into_surface(sk_sp<SkSurface> surface, int W, int H)
@@ -441,12 +480,19 @@ static void present_surface(NSImageView* iv, sk_sp<SkSurface> surface, int W, in
 
 static JSValue js_requestComposite(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
+   static bool first_gpu_draw_done = false;
    if (g_windowSurface || g_use_gpu) {
-      // Run internal layout pass before painting (JS unaware)
-      layout_maybe_run(ctx);
+   // Ensure layout reflects latest style mutations (drag updates) before scheduling GPU composite.
       if (g_use_gpu) {
-         gpu_composite_and_present(g_winW, g_winH);
+         if (!first_gpu_draw_done && getenv("UI_NO_SUPPRESS_EARLY_GPU") == NULL) {
+            // Suppress early composites until initial scheduled frame fires.
+         } else {
+      layout_maybe_run(ctx);
+            schedule_gpu_composite();
+            first_gpu_draw_done = true; // will flip after first schedule
+         }
       } else if (g_windowSurface) {
+         layout_maybe_run(ctx);
          composite_into_surface(g_windowSurface, g_winW, g_winH);
          present_surface(g_canvasImageView, g_windowSurface, g_winW, g_winH);
       }
@@ -924,12 +970,14 @@ int main(int argc, char** argv)
       }
    const char* gpuEnv = getenv("SKIA_GPU");
    const char* runOnlyEnv = getenv("RUN_ONLY");
-   // Disable GPU for benchmark/test mode (RUN_ONLY) to avoid async destruction races
-   if (runOnlyEnv && *runOnlyEnv) {
+   const bool forceWindow = getenv("UI_FORCE_WINDOW") != NULL; // also force GPU if SKIA_GPU set
+   if (runOnlyEnv && *runOnlyEnv && !forceWindow) {
       g_use_gpu = false;
       fprintf(stderr, "[GPU] Disabled (RUN_ONLY=%s) for test mode; using raster.\n", runOnlyEnv);
    } else {
       g_use_gpu = (gpuEnv && gpuEnv[0] != '0');
+      if (runOnlyEnv && *runOnlyEnv && forceWindow && g_use_gpu)
+         fprintf(stderr, "[GPU] RUN_ONLY=%s but UI_FORCE_WINDOW present; GPU enabled.\n", runOnlyEnv);
    }
 #ifdef __APPLE__
       if (g_use_gpu) {
@@ -957,6 +1005,33 @@ int main(int argc, char** argv)
             fprintf(stderr, "[GPU] Metal path active (SKIA_GPU=%s).\n", gpuEnv ? gpuEnv : "");
             // Optional timer-based redraw (env UI_GPU_TIMER=1 to enable). Keeps layer alive & exercises GPU.
             // Lazy redraw on demand only; explicit timers removed for stability.
+            // Observe window close to block further GPU work before layer/context destruction.
+            [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowWillCloseNotification
+                                                              object:window
+                                                               queue:nil
+                                                          usingBlock:^(NSNotification* n){
+               g_gpu_tearing_down.store(true, std::memory_order_release);
+               g_use_gpu = false; // block new composites immediately
+               [NSApp stop:nil];
+            }];
+            // In RUN_ONLY forced window mode enable sync frames by default for stability; allow opt-out via UI_GPU_ASYNC_OK
+            if (runOnlyEnv && *runOnlyEnv && forceWindow) {
+               g_force_sync = (getenv("UI_GPU_ASYNC_OK") == NULL);
+               if (getenv("UI_GPU_PRELOOP")) {
+                  g_gpu_test_preloop = true;
+                  gpu_composite_and_present(g_winW, g_winH);
+                  g_gpu_test_preloop = false;
+               }
+               g_allow_interactive_composite = (getenv("UI_NO_INTERACTIVE") == NULL);
+            }
+            // One-shot initial composite to ensure layer shows content before first user interaction.
+            if (getenv("UI_GPU_INIT_FRAME_DISABLED") == NULL) {
+               dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(30 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+                  if (g_use_gpu && !g_gpu_tearing_down.load(std::memory_order_acquire)) {
+                     schedule_gpu_composite();
+                  }
+               });
+            }
          }
       }
 #endif
@@ -1055,44 +1130,31 @@ int main(int argc, char** argv)
          JS_FreeValue(g_deferred_ctx, tr);
          JS_FreeValue(g_deferred_ctx, global);
       }
-      // Automated GPU frame test (pre-loop synchronous frames): UI_GPU_TEST_FRAMES=N
+      // Automated GPU frame test (pre-loop): render into offscreen SkSurface (no CAMetalLayer drawables) to avoid multi-drawable race.
       if (g_use_gpu) {
          const char* framesEnv = getenv("UI_GPU_TEST_FRAMES");
          if (framesEnv && *framesEnv) {
             int targetFrames = atoi(framesEnv);
             if (targetFrames > 0) {
-               if (targetFrames > 1 && !getenv("UI_GPU_MULTI_OK")) {
-                  fprintf(stderr, "[GPU] UI_GPU_TEST_FRAMES=%d clamped to 1 (multi-frame Metal pre-loop draws unstable). Set UI_GPU_MULTI_OK=1 to force.\n", targetFrames);
-                  targetFrames = 1;
-               }
-               g_gpu_sync_frames = true;
                g_gpu_test_preloop = true;
-               fprintf(stderr, "[GPU] Automated pre-loop frame test: rendering %d frames synchronously.\n", targetFrames);
+               fprintf(stderr, "[GPU] Automated pre-loop frame test (offscreen) : %d frames.\n", targetFrames);
+               // Create offscreen GPU surface if needed
+               if (!g_preloop_gpu_surface) {
+                  SkImageInfo info = SkImageInfo::Make(g_winW, g_winH, kRGBA_8888_SkColorType, kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
+                  g_preloop_gpu_surface = SkSurfaces::RenderTarget(g_grCtx.get(), skgpu::Budgeted::kNo, info, 0, kTopLeft_GrSurfaceOrigin, nullptr);
+                  if (!g_preloop_gpu_surface) {
+                     fprintf(stderr, "[GPU] Failed to create pre-loop GPU surface; skipping test.\n");
+                     targetFrames = 0;
+                  }
+               }
                for (int i = 0; i < targetFrames; ++i) {
-                  gpu_composite_and_present(g_winW, g_winH);
-                  // brief delay to let CAMetalLayer present internals settle
-                  usleep(2000);
+                  if (!g_preloop_gpu_surface) break;
+                  composite_into_surface(g_preloop_gpu_surface, g_winW, g_winH);
+                  g_grCtx->flush();
+                  g_grCtx->submit();
                }
                g_gpu_test_preloop = false;
-               // Immediate teardown without entering run loop to avoid async drawable calls.
-               fprintf(stderr, "[GPU] Pre-loop frames done; performing immediate teardown.\n");
-               for (NSWindow* w in [NSApp windows]) { [w close]; }
-               if (g_deferred_rt && g_deferred_ctx) {
-                  if (void* host = dom_get_host_state(g_deferred_ctx)) {
-                     auto* im = reinterpret_cast<input::InputManager*>(host);
-                     delete im;
-                     dom_set_host_state(g_deferred_ctx, nullptr);
-                  }
-                  do_runtime_full_cleanup(g_deferred_rt, g_deferred_ctx, g_deferred_global, g_deferred_document,
-                                          g_deferred_body);
-                  g_deferred_rt = nullptr;
-                  g_deferred_ctx = nullptr;
-                  g_deferred_global = g_deferred_document = g_deferred_body = JS_UNDEFINED;
-               }
-               if (g_grCtx) { g_grCtx->flush(); g_grCtx->submit(); }
-               gpu_shutdown();
-               g_gpu_sync_frames = false;
-               return 0;
+               fprintf(stderr, "[GPU] Pre-loop offscreen frames done.\n");
             }
          }
       }
