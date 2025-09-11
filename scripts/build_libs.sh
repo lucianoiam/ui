@@ -16,17 +16,16 @@ build_skia() {
   if [ ! -d "$SKIA_DIR/third_party/gn" ]; then (cd "$SKIA_DIR" && python3 tools/git-sync-deps); fi
   local GN_BIN="$SKIA_DIR/third_party/gn/gn"; [ -x "$GN_BIN" ] || chmod +x "$GN_BIN"
   local ENABLE_GPU=${SKIA_GPU:-1}
-  # Metal on macOS by default; allow SKIA_GPU=0 to force CPU-only build.
-  local ARGS="is_official_build=true is_debug=false is_component_build=false skia_enable_tools=false skia_enable_pdf=false"
-  ARGS+=" skia_use_system_libpng=false skia_use_system_icu=false skia_use_system_expat=false skia_use_system_harfbuzz=false skia_use_system_zlib=false"
-  ARGS+=" skia_use_libjpeg_turbo_decode=false skia_use_libjpeg_turbo_encode=false skia_use_libwebp_decode=false skia_use_libwebp_encode=false"
+  # Minimal stable set of args; GPU (Metal) is on by default in Skia when platform supported.
+  # We only explicitly disable Metal when SKIA_GPU=0 to avoid adding unused args that trigger warnings.
+  local ARGS="is_debug=false is_official_build=false is_component_build=false skia_enable_tools=false"
   if [ "$ENABLE_GPU" = "0" ]; then
-    ARGS+=" skia_enable_gpu=false"
+    ARGS+=" skia_use_metal=false skia_use_vulkan=false"
   else
-    ARGS+=" skia_enable_gpu=true skia_use_vulkan=false skia_use_metal=true"
+    ARGS+=" skia_use_metal=true"
   fi
   ARGS+=" cc=\"clang\" cxx=\"clang++\""
-  echo "[skia] gen -> $OUT_DIR (gpu=$ENABLE_GPU)";
+  echo "[skia] gen -> $OUT_DIR (gpu=$ENABLE_GPU, metal=$([ "$ENABLE_GPU" = "0" ] && echo off || echo on))";
   ( cd "$SKIA_DIR" && "$GN_BIN" gen "$OUT_DIR" --args="$ARGS" )
   echo "[skia] build";
   ninja -C "$OUT_DIR"
