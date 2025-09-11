@@ -19,15 +19,28 @@
 #include "renderer/sk_canvas_view.h"
 #include "renderer/viewport.h" // default viewport size
 #import <Cocoa/Cocoa.h>
+#ifdef __APPLE__
+#import <Metal/Metal.h>
+#import <QuartzCore/CAMetalLayer.h>
+#endif
+#include "include/gpu/ganesh/GrDirectContext.h"
+#include "include/gpu/ganesh/GrBackendSurface.h"
+#include "include/gpu/ganesh/SkSurfaceGanesh.h"
+#include "include/gpu/ganesh/mtl/GrMtlTypes.h"
+#include "include/gpu/ganesh/mtl/GrMtlBackendContext.h"
+#include "include/gpu/ganesh/mtl/GrMtlDirectContext.h"
+#include "include/gpu/ganesh/mtl/GrMtlBackendSurface.h"
 #include <include/core/SkCanvas.h>
 #include <include/core/SkImage.h>
 #include <include/core/SkSamplingOptions.h>
 #include <include/core/SkSurface.h>
+#include <include/core/SkColorSpace.h>
 #include <lexbor/html/html.h>
 #include <memory>
 #include <random>
 #include <string>
 #include <utility>
+#include <atomic>
 
 // Forward declare dump_exception for use in mouse event forwarding
 static void dump_exception(JSContext* ctx);
@@ -171,6 +184,116 @@ NSImageView* g_canvasImageView = nil;
 int g_winW = VIEWPORT_DEFAULT_WIDTH;
 int g_winH = VIEWPORT_DEFAULT_HEIGHT;
 sk_sp<SkSurface> g_windowSurface;
+// GPU runtime globals
+static bool g_use_gpu = false; // determined at window creation from SKIA_GPU env
+static bool g_run_loop_active = false; // becomes true once [app run] entered
+static bool g_gpu_sync_frames = false; // force command buffer sync when automated frame test active
+#ifdef __APPLE__
+static NSTimer* g_gpuTestTimer = nil; // automated frame test timer
+#endif
+static bool g_gpu_test_preloop = false; // allow composites before run loop during automated frame test
+static sk_sp<GrDirectContext> g_grCtx;
+#ifdef __APPLE__
+static id<MTLDevice> g_mtlDevice = nil;
+static id<MTLCommandQueue> g_mtlQueue = nil;
+static CAMetalLayer* g_metalLayer = nil;
+#endif
+// Retain a few in-flight textures (Metal completion callbacks may fire after Skia flush returns)
+static std::vector<GrMtlTextureInfo> g_inflight_textures; // cleared on shutdown
+#ifdef __APPLE__
+static std::vector<id<CAMetalDrawable>> g_inflight_drawables; // retain drawables asynchronously
+#endif
+
+static void gpu_shutdown()
+{
+   if (!g_use_gpu)
+      return;
+#ifdef __APPLE__
+   // Flush & release Skia GPU resources first
+   if (g_grCtx) {
+      g_grCtx->flush();
+      g_grCtx->submit();
+      // Abandon to prevent further callbacks referencing freed objects.
+      g_grCtx->releaseResourcesAndAbandonContext();
+      g_grCtx.reset();
+   }
+   g_inflight_textures.clear();
+#ifdef __APPLE__
+   g_inflight_drawables.clear();
+#endif
+#if !__has_feature(objc_arc)
+   if (g_mtlQueue) { [g_mtlQueue release]; g_mtlQueue = nil; }
+   if (g_mtlDevice) { [g_mtlDevice release]; g_mtlDevice = nil; }
+#else
+   g_mtlQueue = nil;
+   g_mtlDevice = nil;
+#endif
+   g_metalLayer = nil;
+#endif
+   g_use_gpu = false;
+}
+
+// Forward declare CPU composite for GPU wrapper usage
+static void composite_into_surface(sk_sp<SkSurface> surface, int W, int H);
+
+static void gpu_composite_and_present(int W, int H)
+{
+   if (!g_use_gpu) return;
+   if (!g_run_loop_active && !g_gpu_test_preloop) return;
+#ifdef __APPLE__
+   if (!g_metalLayer || !g_grCtx) return;
+   @autoreleasepool {
+      id<CAMetalDrawable> drawable = [g_metalLayer nextDrawable];
+      if (!drawable) return;
+      int dw = (int)[drawable.texture width];
+      int dh = (int)[drawable.texture height];
+      GrMtlTextureInfo texInfo; texInfo.fTexture.reset((__bridge void*)drawable.texture);
+      if (!g_gpu_sync_frames) {
+         // Async path: retain a few drawables so their textures stay valid until GPU finishes.
+         g_inflight_drawables.push_back(drawable); // ARC retain
+         if (g_inflight_drawables.size() > 3) {
+            g_inflight_drawables.erase(g_inflight_drawables.begin());
+         }
+         // Track associated texture info ring (parallel size).
+         g_inflight_textures.push_back(texInfo);
+         if (g_inflight_textures.size() > 3) g_inflight_textures.erase(g_inflight_textures.begin());
+         texInfo = g_inflight_textures.back();
+      }
+      GrBackendRenderTarget backendRT = GrBackendRenderTargets::MakeMtl(dw, dh, texInfo);
+      id<MTLCommandBuffer> commandBuffer = [g_mtlQueue commandBuffer];
+      if (!commandBuffer) return;
+      sk_sp<SkColorSpace> cs = SkColorSpace::MakeSRGB();
+      sk_sp<SkSurface> surface = SkSurfaces::WrapBackendRenderTarget(
+          g_grCtx.get(), backendRT, kTopLeft_GrSurfaceOrigin, kBGRA_8888_SkColorType, cs, nullptr);
+      if (!surface) { [commandBuffer commit]; return; }
+      surface->getCanvas()->clear(SkColorSetARGB(255,0x20,0x20,0x20));
+      composite_into_surface(surface, W, H);
+      if (g_gpu_sync_frames) {
+         std::atomic<bool> done(false);
+         GrFlushInfo info = {};
+         info.fFinishedProc = [](void* ctx){ ((std::atomic<bool>*)ctx)->store(true, std::memory_order_release); };
+         info.fFinishedContext = &done;
+         g_grCtx->flush(info);
+         g_grCtx->submit();
+         // Spin-wait briefly (test usage: small frame count) with timeout safeguard
+         const int maxWaitMs = 500; // half second safety
+         int waited = 0;
+         while (!done.load(std::memory_order_acquire) && waited < maxWaitMs) { usleep(1000); waited++; }
+      } else {
+         g_grCtx->flush();
+         g_grCtx->submit();
+      }
+      [commandBuffer presentDrawable:drawable];
+      [commandBuffer commit];
+      if (g_gpu_sync_frames) {
+         [commandBuffer waitUntilCompleted];
+         // Synchronous mode: clear rings (no need to retain beyond frame)
+         g_inflight_textures.clear();
+         g_inflight_drawables.clear();
+      }
+   }
+#endif
+}
 static void composite_into_surface(sk_sp<SkSurface> surface, int W, int H)
 {
    if (!surface)
@@ -292,6 +415,7 @@ static void composite_into_surface(sk_sp<SkSurface> surface, int W, int H)
 
 static void present_surface(NSImageView* iv, sk_sp<SkSurface> surface, int W, int H)
 {
+   // Raster-only path (GPU path uses CAMetalLayer directly)
    if (!iv || !surface)
       return;
    SkPixmap pixmap;
@@ -317,11 +441,15 @@ static void present_surface(NSImageView* iv, sk_sp<SkSurface> surface, int W, in
 
 static JSValue js_requestComposite(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
-   if (g_windowSurface) {
+   if (g_windowSurface || g_use_gpu) {
       // Run internal layout pass before painting (JS unaware)
       layout_maybe_run(ctx);
-      composite_into_surface(g_windowSurface, g_winW, g_winH);
-      present_surface(g_canvasImageView, g_windowSurface, g_winW, g_winH);
+      if (g_use_gpu) {
+         gpu_composite_and_present(g_winW, g_winH);
+      } else if (g_windowSurface) {
+         composite_into_surface(g_windowSurface, g_winW, g_winH);
+         present_surface(g_canvasImageView, g_windowSurface, g_winW, g_winH);
+      }
    }
    return JS_UNDEFINED;
 }
@@ -330,9 +458,13 @@ static JSValue js_requestComposite(JSContext* ctx, JSValueConst this_val, int ar
 void native_request_composite(JSContext* ctx)
 {
    (void)ctx;
-   if (g_windowSurface) {
-      composite_into_surface(g_windowSurface, g_winW, g_winH);
-      present_surface(g_canvasImageView, g_windowSurface, g_winW, g_winH);
+   if (g_windowSurface || g_use_gpu) {
+      if (g_use_gpu) {
+         gpu_composite_and_present(g_winW, g_winH);
+      } else if (g_windowSurface) {
+         composite_into_surface(g_windowSurface, g_winW, g_winH);
+         present_surface(g_canvasImageView, g_windowSurface, g_winW, g_winH);
+      }
    }
 }
 
@@ -709,7 +841,7 @@ int main(int argc, char** argv)
 
    if (stress_loops > 0) {
       int target = which == 2 ? 2 : 1; // default to test1 if 0 or 1
-      for (int i = 0; i < stress_loops; i++) {
+   for (int i = 0; i < stress_loops; i++) {
          fprintf(stderr, "[DIAG] Stress iteration %d/%d start\n", i + 1, stress_loops);
          run_test_suite(target);
          fprintf(stderr, "[DIAG] Stress iteration %d/%d end\n", i + 1, stress_loops);
@@ -745,8 +877,27 @@ int main(int argc, char** argv)
          abort();
       }
    }
-   // After running tests, open a simple window (default viewport size) and
-   // render layers
+   // After tests: if RUN_ONLY set, skip interactive window & GPU to avoid async teardown races
+   if (run_only && *run_only && !getenv("UI_FORCE_WINDOW")) {
+      // Perform deferred cleanup immediately if it was requested (we deferred in test 3)
+      if (g_deferred_rt && g_deferred_ctx) {
+         gpu_shutdown();
+         if (void* host = dom_get_host_state(g_deferred_ctx)) {
+            auto* im = reinterpret_cast<input::InputManager*>(host);
+            delete im;
+            dom_set_host_state(g_deferred_ctx, nullptr);
+         }
+         do_runtime_full_cleanup(g_deferred_rt, g_deferred_ctx, g_deferred_global, g_deferred_document, g_deferred_body);
+         g_deferred_rt = nullptr;
+         g_deferred_ctx = nullptr;
+         g_deferred_global = g_deferred_document = g_deferred_body = JS_UNDEFINED;
+      }
+      return 0;
+   }
+   if (run_only && *run_only && getenv("UI_FORCE_WINDOW")) {
+      fprintf(stderr, "[INFO] RUN_ONLY=%s set but UI_FORCE_WINDOW present; proceeding to create window.\n", run_only);
+   }
+   // Otherwise open a simple window (default viewport size) and render layers
    @autoreleasepool {
       NSApplication* app = [NSApplication sharedApplication];
       [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
@@ -771,22 +922,59 @@ int main(int argc, char** argv)
          extern void dom_set_display_scale(JSContext * ctx, float scale);
          dom_set_display_scale(g_deferred_ctx, (float)scale);
       }
-      // Create window surface in device pixels, draw in logical coords by scaling canvas.
-      const int pw = (int)llround(g_winW * scale);
-      const int ph = (int)llround(g_winH * scale);
-      SkImageInfo info = SkImageInfo::Make(pw, ph, kN32_SkColorType, kPremul_SkAlphaType);
-      g_windowSurface = SkSurfaces::Raster(info);
-   // Do not scale the window canvas; surfaces are created in device pixels and compositing uses logical coords.
-      g_canvasImageView = (NSImageView*)[[InputImageView alloc] initWithFrame:frame];
-      // Ensure view/layer present at correct scale
-      if ([g_canvasImageView respondsToSelector:@selector(setWantsLayer:)]) {
-         [g_canvasImageView setWantsLayer:YES];
-         if (g_canvasImageView.layer) g_canvasImageView.layer.contentsScale = scale;
+   const char* gpuEnv = getenv("SKIA_GPU");
+   const char* runOnlyEnv = getenv("RUN_ONLY");
+   // Disable GPU for benchmark/test mode (RUN_ONLY) to avoid async destruction races
+   if (runOnlyEnv && *runOnlyEnv) {
+      g_use_gpu = false;
+      fprintf(stderr, "[GPU] Disabled (RUN_ONLY=%s) for test mode; using raster.\n", runOnlyEnv);
+   } else {
+      g_use_gpu = (gpuEnv && gpuEnv[0] != '0');
+   }
+#ifdef __APPLE__
+      if (g_use_gpu) {
+         g_mtlDevice = MTLCreateSystemDefaultDevice();
+         if (!g_mtlDevice) { fprintf(stderr, "[GPU] No Metal device; fallback.\n"); g_use_gpu = false; }
+         if (g_use_gpu) { g_mtlQueue = [g_mtlDevice newCommandQueue]; if (!g_mtlQueue) { fprintf(stderr, "[GPU] No queue; fallback.\n"); g_use_gpu=false; } }
+         if (g_use_gpu) {
+            GrMtlBackendContext backend = {};
+            backend.fDevice.reset((__bridge void*)g_mtlDevice);
+            backend.fQueue.reset((__bridge void*)g_mtlQueue);
+            g_grCtx = GrDirectContexts::MakeMetal(backend);
+            if (!g_grCtx) { fprintf(stderr, "[GPU] GrDirectContext failed; fallback.\n"); g_use_gpu=false; }
+         }
+         if (g_use_gpu) {
+            g_metalLayer = [CAMetalLayer layer];
+            g_metalLayer.device = g_mtlDevice;
+            g_metalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+            g_metalLayer.frame = frame;
+            g_metalLayer.drawableSize = CGSizeMake(g_winW * scale, g_winH * scale);
+            g_metalLayer.contentsScale = scale;
+            NSView* gpuView = [[InputImageView alloc] initWithFrame:frame];
+            [gpuView setWantsLayer:YES];
+            gpuView.layer = g_metalLayer;
+            [window setContentView:gpuView];
+            fprintf(stderr, "[GPU] Metal path active (SKIA_GPU=%s).\n", gpuEnv ? gpuEnv : "");
+            // Optional timer-based redraw (env UI_GPU_TIMER=1 to enable). Keeps layer alive & exercises GPU.
+            // Lazy redraw on demand only; explicit timers removed for stability.
+         }
       }
-      if (g_windowSurface && g_canvasImageView) {
-         composite_into_surface(g_windowSurface, g_winW, g_winH);
-         present_surface(g_canvasImageView, g_windowSurface, g_winW, g_winH);
-         [window setContentView:g_canvasImageView];
+#endif
+      if (!g_use_gpu) {
+         const int pw = (int)llround(g_winW * scale);
+         const int ph = (int)llround(g_winH * scale);
+         SkImageInfo info = SkImageInfo::Make(pw, ph, kN32_SkColorType, kPremul_SkAlphaType);
+         g_windowSurface = SkSurfaces::Raster(info);
+         g_canvasImageView = (NSImageView*)[[InputImageView alloc] initWithFrame:frame];
+         if ([g_canvasImageView respondsToSelector:@selector(setWantsLayer:)]) {
+            [g_canvasImageView setWantsLayer:YES];
+            if (g_canvasImageView.layer) g_canvasImageView.layer.contentsScale = scale;
+         }
+         if (g_windowSurface && g_canvasImageView) {
+            composite_into_surface(g_windowSurface, g_winW, g_winH);
+            present_surface(g_canvasImageView, g_windowSurface, g_winW, g_winH);
+            [window setContentView:g_canvasImageView];
+         }
       }
       // Expose requestComposite() to JS for drag updates
       if (g_deferred_ctx) {
@@ -867,11 +1055,56 @@ int main(int argc, char** argv)
          JS_FreeValue(g_deferred_ctx, tr);
          JS_FreeValue(g_deferred_ctx, global);
       }
-      [app run];
+      // Automated GPU frame test (pre-loop synchronous frames): UI_GPU_TEST_FRAMES=N
+      if (g_use_gpu) {
+         const char* framesEnv = getenv("UI_GPU_TEST_FRAMES");
+         if (framesEnv && *framesEnv) {
+            int targetFrames = atoi(framesEnv);
+            if (targetFrames > 0) {
+               if (targetFrames > 1 && !getenv("UI_GPU_MULTI_OK")) {
+                  fprintf(stderr, "[GPU] UI_GPU_TEST_FRAMES=%d clamped to 1 (multi-frame Metal pre-loop draws unstable). Set UI_GPU_MULTI_OK=1 to force.\n", targetFrames);
+                  targetFrames = 1;
+               }
+               g_gpu_sync_frames = true;
+               g_gpu_test_preloop = true;
+               fprintf(stderr, "[GPU] Automated pre-loop frame test: rendering %d frames synchronously.\n", targetFrames);
+               for (int i = 0; i < targetFrames; ++i) {
+                  gpu_composite_and_present(g_winW, g_winH);
+                  // brief delay to let CAMetalLayer present internals settle
+                  usleep(2000);
+               }
+               g_gpu_test_preloop = false;
+               // Immediate teardown without entering run loop to avoid async drawable calls.
+               fprintf(stderr, "[GPU] Pre-loop frames done; performing immediate teardown.\n");
+               for (NSWindow* w in [NSApp windows]) { [w close]; }
+               if (g_deferred_rt && g_deferred_ctx) {
+                  if (void* host = dom_get_host_state(g_deferred_ctx)) {
+                     auto* im = reinterpret_cast<input::InputManager*>(host);
+                     delete im;
+                     dom_set_host_state(g_deferred_ctx, nullptr);
+                  }
+                  do_runtime_full_cleanup(g_deferred_rt, g_deferred_ctx, g_deferred_global, g_deferred_document,
+                                          g_deferred_body);
+                  g_deferred_rt = nullptr;
+                  g_deferred_ctx = nullptr;
+                  g_deferred_global = g_deferred_document = g_deferred_body = JS_UNDEFINED;
+               }
+               if (g_grCtx) { g_grCtx->flush(); g_grCtx->submit(); }
+               gpu_shutdown();
+               g_gpu_sync_frames = false;
+               return 0;
+            }
+         }
+      }
+   g_run_loop_active = true;
+   [app run];
+   g_run_loop_active = false;
       // After window loop exits (user closed window), perform deferred cleanup if
       // any
-      if (g_deferred_rt && g_deferred_ctx) {
-         // Delete host state (InputManager) stored per-context prior to teardown
+   if (g_deferred_rt && g_deferred_ctx) {
+      // Close any lingering windows explicitly (automated test mode does not close them itself)
+      for (NSWindow* w in [NSApp windows]) { [w close]; }
+      // Delete host state (InputManager) stored per-context prior to teardown
          if (void* host = dom_get_host_state(g_deferred_ctx)) {
             auto* im = reinterpret_cast<input::InputManager*>(host);
             delete im;
@@ -882,7 +1115,16 @@ int main(int argc, char** argv)
          g_deferred_rt = nullptr;
          g_deferred_ctx = nullptr;
          g_deferred_global = g_deferred_document = g_deferred_body = JS_UNDEFINED;
+      // Final Skia flush & queue drain before GPU shutdown
+      if (g_use_gpu && g_grCtx) { g_grCtx->flush(); g_grCtx->submit(); }
+      // Spin briefly giving Metal a chance to retire (replace with proper fence later)
+      if (g_use_gpu) usleep(30000);
+      gpu_shutdown();
       }
+      else {
+         gpu_shutdown(); // safety if no deferred ctx
+      }
+   g_gpu_sync_frames = false; // reset for subsequent runs (if any)
    }
    return 0;
 }

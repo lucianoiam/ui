@@ -111,6 +111,8 @@ LIBS=(
   -framework CoreServices
   -framework ApplicationServices
   -framework JavaScriptCore
+  -framework Metal
+  -framework QuartzCore
 )
 
 
