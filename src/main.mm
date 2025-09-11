@@ -149,6 +149,10 @@ static Renderer* renderer_from_ctx(JSContext* ctx)
       return nullptr;
    JSValue global = JS_GetGlobalObject(ctx);
    JSValue document = JS_GetPropertyStr(ctx, global, "document");
+   if (JS_IsException(document) || JS_IsUndefined(document)) {
+      JS_FreeValue(ctx, global);
+      return nullptr;
+   }
    auto* docNode = reinterpret_cast<dom::Node*>(dom_get_cpp_node_opaque(ctx, (JSValueConst)document));
    JS_FreeValue(ctx, document);
    JS_FreeValue(ctx, global);
@@ -163,10 +167,10 @@ static Renderer* renderer_from_ctx(JSContext* ctx)
    return nullptr;
 }
 
-static NSImageView* g_canvasImageView = nil;
-static sk_sp<SkSurface> g_windowSurface;
-int g_winW = VIEWPORT_DEFAULT_WIDTH,
-    g_winH = VIEWPORT_DEFAULT_HEIGHT;
+NSImageView* g_canvasImageView = nil;
+int g_winW = VIEWPORT_DEFAULT_WIDTH;
+int g_winH = VIEWPORT_DEFAULT_HEIGHT;
+sk_sp<SkSurface> g_windowSurface;
 static void composite_into_surface(sk_sp<SkSurface> surface, int W, int H)
 {
    if (!surface)
@@ -793,28 +797,31 @@ int main(int argc, char** argv)
          // source: g_winW/g_winH)
          char viewportDecl[128];
          snprintf(viewportDecl, sizeof(viewportDecl), "globalThis.__viewport={w:%d,h:%d};\n", g_winW, g_winH);
-         const char* dispatchBody =
+       const char* dispatchBody =
              "if(!globalThis.__dispatchNativeMouseInstalled){\n"
              "  globalThis.__dispatchNativeMouseInstalled=true;\n"
              "  globalThis.__dispatchNativeMouse=function(ev){\n"
              "    if(!ev||!ev.type)return; const t=ev.type; const x=ev.clientX|0; const y=ev.clientY|0;\n"
-             "    var target=null; var nodes=document.getElementsByTagName?"
-             "Array.from(document.getElementsByTagName('canvas')):[];\n"
-             "    for(var i=nodes.length-1;i>=0;i--){\n"
-             "      var n=nodes[i]; var st=n.getAttribute? (n.getAttribute('style')||''):'';\n"
-             "      var mW=st.match(/width:(\\d+)/); var mH=st.match(/height:(\\d+)/);"
-             " var mL=st.match(/left:(\\d+)/); var mT=st.match(/top:(\\d+)/);\n"
-             "      var w=mW?+mW[1]:64; var h=mH?+mH[1]:64; var lx=mL?+mL[1]:0; var ty=mT?+mT[1]:0;\n"
-             "      if(x>=lx&&x<=lx+w&&y>=ty&&y<=ty+h){ target=n; break; }\n"
+             "    var target=null; var captured=globalThis.__dragTarget||null;\n"
+             "    var nodes=document.getElementsByTagName?Array.from(document.getElementsByTagName('canvas')):[];\n"
+             "    if(captured){ target=captured; } else {\n"
+             "      for(var i=nodes.length-1;i>=0;i--){\n"
+             "        var n=nodes[i]; var st=n.getAttribute? (n.getAttribute('style')||''):'';\n"
+             "        var mW=st.match(/width:(\\d+)/); var mH=st.match(/height:(\\d+)/);\n"
+             "        var mL=st.match(/left:(\\d+)/); var mT=st.match(/top:(\\d+)/);\n"
+             "        var w=mW?+mW[1]:64; var h=mH?+mH[1]:64; var lx=mL?+mL[1]:0; var ty=mT?+mT[1]:0;\n"
+             "        if(x>=lx&&x<=lx+w&&y>=ty&&y<=ty+h){ target=n; break; }\n"
+             "      }\n"
              "    }\n"
-             "    if(!target) return;\n"
-             "    if(t==='mousedown'){\n"
+             "    if(!target && t!=='mousemove' && t!=='mouseup') return;\n"
+             "    if(t==='mousedown' && target){\n"
              "      var st=target.getAttribute('style')||'';\n"
              "      var mL=/left:(\\d+)/.exec(st); var mT=/top:(\\d+)/.exec(st);\n"
              "      target.__draggingOffset=[x-(mL?+mL[1]:0), y-(mT?+mT[1]:0)];\n"
+             "      globalThis.__dragTarget=target; globalThis.__dragActive=true;\n"
              "    }\n"
-             "    if(t==='mousemove' && target.__draggingOffset){\n"
-             "      var off=target.__draggingOffset; var st=target.getAttribute('style')||'';\n"
+             "    if(t==='mousemove' && globalThis.__dragTarget){\n"
+             "      var target=globalThis.__dragTarget; var off=target.__draggingOffset; var st=target.getAttribute('style')||'';\n"
              "      var mW=st.match(/width:(\\d+)/); var mH=st.match(/height:(\\d+)/);"
              " var w=mW?+mW[1]:64; var h=mH?+mH[1]:64;\n"
              "      var nx=Math.max(0,Math.min(globalThis.__viewport.w-w,x-off[0]));\n"
@@ -823,9 +830,10 @@ int main(int argc, char** argv)
              ".replace(/top:\\d+/, 'top:'+ny));\n"
              "      if(typeof requestComposite==='function') requestComposite();\n"
              "    }\n"
-             "    if(t==='mouseup'){ if(target.__draggingOffset) delete target.__draggingOffset; }\n"
-             "    var arr = target['__listeners_'+t];\n"
-             "    if (Array.isArray(arr)) { for (var i=0;i<arr.length;i++){ try { arr[i].call(target, ev); } catch(e) "
+             "    if(t==='mouseup'){ if(globalThis.__dragTarget){ delete globalThis.__dragTarget.__draggingOffset; } globalThis.__dragTarget=null; globalThis.__dragActive=false; }\n"
+             "    var dispatchEl = globalThis.__dragTarget || target;\n"
+             "    var arr = dispatchEl? dispatchEl['__listeners_'+t] : null;\n"
+             "    if (Array.isArray(arr)) { for (var i=0;i<arr.length;i++){ try { arr[i].call(dispatchEl, ev); } catch(e) "
              "{} } }\n"
              "  };\n"
              "}\n";
@@ -835,17 +843,24 @@ int main(int argc, char** argv)
          if (JS_IsException(r))
             dump_exception(g_deferred_ctx);
          JS_FreeValue(g_deferred_ctx, r);
-         // Install requestComposite throttling (~16ms) to coalesce rapid mousemove events
-         const char* throttleComposite =
-             "if(typeof requestComposite==='function' && !globalThis.__rcThrottle){"
-             "(function(){var last=0;var pending=false;function "
-             "fire(){pending=false;last=Date.now();requestCompositeImmediate();}"
-             "if(!globalThis.requestCompositeImmediate){globalThis.requestCompositeImmediate=requestComposite;}"
-             "globalThis.requestComposite=function(){var now=Date.now();var dt=now-last;"
-             "if(dt>=16){fire();}else if(!pending && typeof "
-             "setTimeout==='function'){pending=true;setTimeout(fire,16-dt);} };"
-             "globalThis.__rcThrottle=true;})();}";
-         JSValue tr = JS_Eval(g_deferred_ctx, throttleComposite, strlen(throttleComposite),
+         // Install requestComposite throttling with env-configurable pacing and drag-aware fast path
+         double normalDt = 16.0;
+         if (const char* s = getenv("UI_TARGET_DT_MS")) { double v = atof(s); if (v >= 0.0) normalDt = v; }
+         else if (const char* s2 = getenv("UI_MAX_FPS")) { double f = atof(s2); if (f > 0.0) normalDt = 1000.0 / f; }
+         double dragDt = 0.0; // default: immediate during drag
+         if (const char* sd = getenv("UI_DRAG_DT_MS")) { double v = atof(sd); if (v >= 0.0) dragDt = v; }
+         else if (const char* sf = getenv("UI_DRAG_MAX_FPS")) { double f = atof(sf); if (f > 0.0) dragDt = 1000.0 / f; }
+         char throttleBuf[1024];
+         snprintf(throttleBuf, sizeof(throttleBuf),
+                  "if(typeof requestComposite==='function' && !globalThis.__rcThrottle){"
+                  "(function(){var last=0;var pending=false;function fire(){pending=false;last=Date.now();requestCompositeImmediate();}"
+                  "if(!globalThis.requestCompositeImmediate){globalThis.requestCompositeImmediate=requestComposite;}"
+                  "globalThis.requestComposite=function(){var now=Date.now();var target=(globalThis.__dragActive?%.3f:%.3f);"
+                  "if(target<=0){if(!pending && typeof setTimeout==='function'){pending=true;setTimeout(fire,0);}return;}"
+                  "var dt=now-last; if(dt>=target){fire();} else if(!pending && typeof setTimeout==='function'){pending=true;setTimeout(fire,Math.max(0, target-dt));}};"
+                  "globalThis.__rcThrottle=true;})();}",
+                  dragDt, normalDt);
+         JSValue tr = JS_Eval(g_deferred_ctx, throttleBuf, strlen(throttleBuf),
                               "<throttle_requestComposite>", JS_EVAL_TYPE_GLOBAL);
          if (JS_IsException(tr))
             dump_exception(g_deferred_ctx);
